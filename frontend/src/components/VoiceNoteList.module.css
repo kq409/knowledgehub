@@ -1,0 +1,75 @@
+.empty {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: var(--font-size-sm);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.item {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+  border: 1px solid rgba(91, 159, 245, 0.25);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.item.selected {
+  border-color: rgba(91, 159, 245, 0.7);
+  background: rgba(91, 159, 245, 0.12);
+}
+
+.selectButton {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  text-align: left;
+  color: inherit;
+}
+
+.itemTitle {
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: var(--font-weight-medium);
+}
+
+.itemMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: var(--font-size-xs);
+}
+
+.status {
+  text-transform: capitalize;
+}
+
+.deleteButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: var(--radius-md);
+}
+
+.deleteButton:hover {
+  color: var(--color-error);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.icon {
+  width: 16px;
+  height: 16px;
+}

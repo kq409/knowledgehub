@@ -1,0 +1,362 @@
+import asyncio
+import json
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+
+from openai import OpenAI
+from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models import Paper, PaperComparison, PaperStatus
+from schemas import (
+    CitationSourceType,
+    CompareCitation,
+    CompareLinkedNote,
+    ComparePaperResult,
+    CompareRequest,
+    CompareResponse,
+    CompareSynthesis,
+    normalize_dimensions,
+    normalize_paper_ids,
+)
+from services.embeddings import EmbeddingService
+from services.extraction import parse_json_object
+from services.retrieval import (
+    LinkedNote,
+    RetrievalHit,
+    list_linked_notes,
+    search_for_paper,
+    snippet_from,
+)
+
+MAP_PROMPT_FILE = Path(__file__).resolve().parent.parent / "compare_map_prompt.txt"
+REDUCE_PROMPT_FILE = Path(__file__).resolve().parent.parent / "compare_reduce_prompt.txt"
+MAP_PROMPT = MAP_PROMPT_FILE.read_text().strip()
+REDUCE_PROMPT = REDUCE_PROMPT_FILE.read_text().strip()
+PROMPT_VERSION = "compare-papers-v1"
+COMPARE_MAX_TOKENS = 1500
+EVIDENCE_CHARS = 800
+
+PAPER_LABEL = "Paper"
+NOTE_LABELS = {
+    "voice": "Researcher's voice note (not a paper claim)",
+    "handwritten": "Researcher's handwritten note (not a paper claim)",
+}
+
+
+class CompareError(Exception):
+    """Raised when comparison generation fails."""
+
+
+class CompareValidationError(Exception):
+    """Raised when the comparison request is invalid."""
+
+
+def dimension_query(dimensions: list[str]) -> str:
+    labels = ", ".join(dim.replace("_", " ") for dim in dimensions)
+    return f"Compare these papers on: {labels}"
+
+
+def _location(hit: RetrievalHit) -> str:
+    parts: list[str] = []
+    if hit.year is not None:
+        parts.append(str(hit.year))
+    if hit.page is not None:
+        parts.append(f"p. {hit.page}")
+    if hit.section:
+        parts.append(hit.section)
+    if not parts:
+        return ""
+    return " (" + ", ".join(parts) + ")"
+
+
+def _hit_label(hit: RetrievalHit) -> str:
+    if hit.source_type == "paper":
+        return PAPER_LABEL
+    return NOTE_LABELS.get(hit.source_type, hit.source_type)
+
+
+def format_paper_evidence(paper_title: str, hits: list[RetrievalHit]) -> str:
+    numbered = list(enumerate(hits, start=1))
+    paper_hits = [(idx, hit) for idx, hit in numbered if hit.source_type == "paper"]
+    note_hits = [(idx, hit) for idx, hit in numbered if hit.source_type != "paper"]
+    blocks = [f"Paper: {paper_title}"]
+
+    if paper_hits:
+        paper_blocks = [
+            f"[{idx}] {PAPER_LABEL} — {hit.title}{_location(hit)}\n"
+            f"{hit.snippet(max_chars=EVIDENCE_CHARS)}"
+            for idx, hit in paper_hits
+        ]
+        blocks.append("Paper evidence:\n" + "\n\n".join(paper_blocks))
+    else:
+        blocks.append("Paper evidence:\nNo paper chunks were retrieved.")
+
+    if note_hits:
+        note_blocks = [
+            f"[{idx}] {_hit_label(hit)} — {hit.title}{_location(hit)}\n"
+            f"{hit.snippet(max_chars=EVIDENCE_CHARS)}"
+            for idx, hit in note_hits
+        ]
+        blocks.append(
+            "Researcher notes (commentary only; do not treat as paper claims):\n"
+            + "\n\n".join(note_blocks)
+        )
+    return "\n\n".join(blocks)
+
+
+def _cell_value(payload: dict, dimension: str) -> str:
+    if dimension in payload:
+        return str(payload[dimension] or "").strip()
+    alt = dimension.replace("_", " ")
+    lowered = {str(key).lower(): value for key, value in payload.items()}
+    for key in (dimension.lower(), alt.lower()):
+        if key in lowered:
+            return str(lowered[key] or "").strip()
+    return ""
+
+
+def cells_from_payload(payload: dict, dimensions: list[str]) -> dict[str, str]:
+    return {dimension: _cell_value(payload, dimension) for dimension in dimensions}
+
+
+def _as_uuid(value: object) -> uuid.UUID:
+    if isinstance(value, uuid.UUID):
+        return value
+    return uuid.UUID(str(value))
+
+
+class CompareService:
+    def __init__(
+        self,
+        llm_client: OpenAI,
+        llm_model: str,
+        embeddings: EmbeddingService,
+    ):
+        self.llm_client = llm_client
+        self.llm_model = llm_model
+        self.embeddings = embeddings
+        self.prompt_version = PROMPT_VERSION
+
+    def _complete(self, messages: list[dict[str, str]]) -> str:
+        response = self.llm_client.chat.completions.create(
+            model=self.llm_model,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=COMPARE_MAX_TOKENS,
+            stream=False,
+        )
+        return (response.choices[0].message.content or "").strip()
+
+    def _complete_json(
+        self, messages: list[dict[str, str]], *, what: str
+    ) -> dict:
+        last_error: Exception | None = None
+        working = list(messages)
+        for attempt in range(2):
+            output = self._complete(working)
+            try:
+                return parse_json_object(output)
+            except (json.JSONDecodeError, ValueError) as exc:
+                last_error = exc
+                working.append({"role": "assistant", "content": output})
+                working.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Your previous reply was not valid JSON matching the schema. "
+                            f"Error: {exc}. Return ONLY the JSON object."
+                        ),
+                    }
+                )
+                print(f"⚠️  Compare {what} attempt {attempt + 1} failed: {exc}")
+        raise CompareError(f"Could not parse {what} JSON: {last_error}") from last_error
+
+    def _map_paper(
+        self,
+        paper: Paper,
+        dimensions: list[str],
+        hits: list[RetrievalHit],
+    ) -> dict[str, str]:
+        user_content = (
+            f"Dimensions (use these exact keys):\n{json.dumps(dimensions)}\n\n"
+            f"Evidence:\n{format_paper_evidence(paper.title, hits)}"
+        )
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": MAP_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+        if not any(hit.source_type == "paper" for hit in hits):
+            return dict.fromkeys(dimensions, "")
+        payload = self._complete_json(messages, what="map")
+        return cells_from_payload(payload, dimensions)
+
+    def _reduce(
+        self,
+        papers: list[Paper],
+        dimensions: list[str],
+        cells: dict[uuid.UUID, dict[str, str]],
+    ) -> CompareSynthesis:
+        rows = []
+        for paper in papers:
+            rows.append(
+                {
+                    "paper_id": str(paper.id),
+                    "title": paper.title,
+                    "year": paper.year,
+                    "values": cells.get(paper.id, {}),
+                }
+            )
+        user_content = (
+            f"Dimensions:\n{json.dumps(dimensions)}\n\n"
+            f"Per-paper cells:\n{json.dumps(rows, indent=2)}"
+        )
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": REDUCE_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+        payload = self._complete_json(messages, what="reduce")
+        try:
+            return CompareSynthesis.model_validate(
+                {
+                    "agreements": str(payload.get("agreements") or "").strip(),
+                    "disagreements": str(payload.get("disagreements") or "").strip(),
+                    "research_gap": str(payload.get("research_gap") or "").strip(),
+                }
+            )
+        except ValidationError as exc:
+            raise CompareError(f"Invalid synthesis payload: {exc}") from exc
+
+    async def _load_papers(
+        self, session: AsyncSession, paper_ids: list[uuid.UUID]
+    ) -> list[Paper]:
+        result = await session.execute(select(Paper).where(Paper.id.in_(paper_ids)))
+        found = {paper.id: paper for paper in result.scalars().all()}
+        papers: list[Paper] = []
+        missing: list[str] = []
+        not_ready: list[str] = []
+        for paper_id in paper_ids:
+            paper = found.get(paper_id)
+            if paper is None:
+                missing.append(str(paper_id))
+                continue
+            if paper.processing_status != PaperStatus.ready.value:
+                not_ready.append(paper.title or str(paper_id))
+                continue
+            papers.append(paper)
+        if missing:
+            raise CompareValidationError(
+                "Paper not found: " + ", ".join(missing)
+            )
+        if not_ready:
+            raise CompareValidationError(
+                "Only ready papers can be compared: " + ", ".join(not_ready)
+            )
+        return papers
+
+    async def compare(
+        self, session: AsyncSession, payload: CompareRequest
+    ) -> CompareResponse:
+        try:
+            paper_ids = normalize_paper_ids(payload.paper_ids)
+            dimensions = normalize_dimensions(payload.dimensions)
+        except ValueError as exc:
+            raise CompareValidationError(str(exc)) from exc
+
+        papers = await self._load_papers(session, paper_ids)
+        query = dimension_query(dimensions)
+        query_embedding = await asyncio.to_thread(self.embeddings.embed_query, query)
+        linked = await list_linked_notes(session, paper_ids)
+        notes_by_paper: dict[uuid.UUID, list[LinkedNote]] = {}
+        for note in linked:
+            notes_by_paper.setdefault(note.paper_id, []).append(note)
+
+        cells: dict[uuid.UUID, dict[str, str]] = {}
+        citations: list[CompareCitation] = []
+        index = 1
+        for paper in papers:
+            hits = await search_for_paper(session, query_embedding, paper.id)
+            mapped = await asyncio.to_thread(self._map_paper, paper, dimensions, hits)
+            cells[paper.id] = mapped
+            for hit in hits:
+                citations.append(
+                    CompareCitation(
+                        index=index,
+                        source_type=CitationSourceType(hit.source_type),
+                        source_id=hit.source_id,
+                        chunk_id=hit.chunk_id,
+                        paper_id=paper.id,
+                        title=hit.title,
+                        page=hit.page,
+                        section=hit.section,
+                        year=hit.year,
+                        snippet=snippet_from(hit.text),
+                        similarity=hit.similarity,
+                    )
+                )
+                index += 1
+
+        synthesis = await asyncio.to_thread(
+            self._reduce, papers, dimensions, cells
+        )
+
+        paper_results = [
+            ComparePaperResult(
+                paper_id=paper.id,
+                title=paper.title,
+                year=paper.year,
+                values=cells.get(paper.id, dict.fromkeys(dimensions, "")),
+                linked_notes=[
+                    CompareLinkedNote(
+                        id=note.id,
+                        paper_id=note.paper_id,
+                        title=note.title,
+                        source_type=CitationSourceType(note.source_type),
+                    )
+                    for note in notes_by_paper.get(paper.id, [])
+                ],
+            )
+            for paper in papers
+        ]
+
+        created_at = datetime.now(UTC)
+        comparison = PaperComparison(
+            paper_ids=[str(paper_id) for paper_id in paper_ids],
+            dimensions=dimensions,
+            result={
+                "papers": [item.model_dump(mode="json") for item in paper_results],
+                "synthesis": synthesis.model_dump(),
+            },
+            citations=[item.model_dump(mode="json") for item in citations],
+            model=self.llm_model,
+            prompt_version=self.prompt_version,
+            created_at=created_at,
+        )
+        session.add(comparison)
+        await session.commit()
+        await session.refresh(comparison)
+        return response_from_row(comparison)
+
+
+def response_from_row(row: PaperComparison) -> CompareResponse:
+    result = row.result or {}
+    papers_raw = result.get("papers") or []
+    papers = [ComparePaperResult.model_validate(item) for item in papers_raw]
+    synthesis = CompareSynthesis.model_validate(result.get("synthesis") or {})
+    citations = [
+        CompareCitation.model_validate(item) for item in (row.citations or [])
+    ]
+    paper_ids = [_as_uuid(item) for item in row.paper_ids]
+    return CompareResponse(
+        id=row.id,
+        paper_ids=paper_ids,
+        dimensions=list(row.dimensions or []),
+        papers=papers,
+        synthesis=synthesis,
+        citations=citations,
+        model=row.model,
+        prompt_version=row.prompt_version,
+        created_at=row.created_at,
+    )

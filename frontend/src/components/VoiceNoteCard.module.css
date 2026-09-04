@@ -1,0 +1,128 @@
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 140px;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: var(--font-size-sm);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: capitalize;
+  letter-spacing: 0.02em;
+}
+
+.status.generated {
+  background: rgba(91, 159, 245, 0.2);
+  color: #dbeafe;
+}
+
+.status.draft {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde68a;
+}
+
+.status.reviewed {
+  background: rgba(139, 92, 246, 0.2);
+  color: #ddd6fe;
+}
+
+.status.accepted {
+  background: rgba(52, 211, 153, 0.2);
+  color: #bbf7d0;
+}
+
+.savedLabel {
+  font-size: var(--font-size-xs);
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.fieldLabel {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.hint {
+  font-weight: var(--font-weight-normal);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: var(--font-size-xs);
+}
+
+.actions,
+.statusActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.primaryButton,
+.secondaryButton,
+.statusButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  transition: all var(--transition-base);
+}
+
+.primaryButton {
+  color: white;
+  background: var(--color-primary);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.primaryButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.secondaryButton,
+.statusButton {
+  color: #1e3a5f;
+  background: white;
+  border: 1px solid rgba(30, 58, 95, 0.2);
+}
+
+.secondaryButton:hover,
+.statusButton:hover:not(:disabled) {
+  background: var(--color-primary);
+  color: white;
+}
+
+.statusButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.icon {
+  width: 14px;
+  height: 14px;
+}

@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+backend/.venv/
+.ruff_cache/
+.pytest_cache/
+
+# Hugging Face / Docling model cache
+.cache/huggingface/
+
+# Logs
+ollama.log
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+# VSCode - Keep shared config, ignore user-specific files
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# Whisper cache
+~/.cache/
+
+# Temporary files
+*.tmp
+*.temp
+nohup.out
+
+# Build artifacts
+dist/
+
+# Uploaded research assets
+data/papers/*
+!data/papers/.gitkeep
+data/notes/*
+!data/notes/.gitkeep
+
+# Environment
+.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+tmp
+ResearchPilot_8_Features_Technical_Design.md

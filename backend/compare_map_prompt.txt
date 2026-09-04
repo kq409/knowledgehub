@@ -1,0 +1,12 @@
+You extract a structured comparison row for ONE paper from the numbered evidence.
+
+Return ONLY a JSON object whose keys are exactly the dimension names provided.
+Each value must be a short string grounded in PAPER evidence. Use an empty string if the evidence does not support that dimension.
+
+Rules:
+- Papers are published work. Voice notes and handwritten notes are the researcher's own views.
+- Never write a researcher note as if it were a paper claim. If a note is relevant, prefix it with "researcher note: ".
+- Do not invent methods, datasets, results, or citations.
+- Do not make field-wide or SOTA claims.
+- Do not wrap the JSON in markdown fences.
+- Do not include any text outside the JSON object.

@@ -1,0 +1,95 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    volumes:
+      # Mount the workspace
+      - ..:/workspaces/researchpilot:cached
+
+    command: sleep infinity
+
+    # Forward ports for backend and frontend
+    ports:
+      - "8000:8000"
+      - "8080:3000"
+
+    # Use non-root user
+    user: vscode
+
+    depends_on:
+      ollama:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      grobid:
+        condition: service_started
+
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: postgresql+asyncpg://researchpilot:researchpilot@postgres:5432/researchpilot
+      HF_HOME: /workspaces/researchpilot/.cache/huggingface
+      GROBID_URL: http://grobid:8070
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      CUDA_MODULE_LOADING: LAZY
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: researchpilot
+      POSTGRES_PASSWORD: researchpilot
+      POSTGRES_DB: researchpilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - researchpilot-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U researchpilot -d researchpilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  ollama:
+    image: ollama/ollama:0.12.9
+    volumes:
+      # Store models in a named volume for persistence
+      - researchpilot-ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  grobid:
+    image: grobid/grobid:0.8.2
+    ports:
+      - "8070:8070"
+    environment:
+      JAVA_OPTS: "-Xmx2g"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8070/api/isalive || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 60s
+
+volumes:
+  researchpilot-ollama-models:
+  researchpilot-postgres-data:
