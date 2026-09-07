@@ -171,3 +171,65 @@ async def test_reject_non_pdf_note(client: AsyncClient):
     files = {"file": ("notes.txt", b"not a pdf", "text/plain")}
     response = await client.post("/api/notes/upload", files=files)
     assert response.status_code == 400
+
+
+async def test_note_paper_ids_replace_and_reject_missing(client: AsyncClient):
+    from datetime import UTC, datetime
+
+    from models import Paper, PaperStatus
+
+    created = await client.post("/api/notes", json=voice_payload())
+    assert created.status_code == 201
+    note_id = created.json()["id"]
+    a = Paper(
+        title="Paper A",
+        original_filename="a.pdf",
+        original_file="/tmp/a.pdf",
+        processing_status=PaperStatus.ready.value,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    b = Paper(
+        title="Paper B",
+        original_filename="b.pdf",
+        original_file="/tmp/b.pdf",
+        processing_status=PaperStatus.ready.value,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    assert db.SessionLocal is not None
+    async with db.SessionLocal() as session:
+        session.add_all([a, b])
+        await session.commit()
+        await session.refresh(a)
+        await session.refresh(b)
+        a_id, b_id = a.id, b.id
+
+    try:
+        patched = await client.patch(
+            f"/api/notes/{note_id}",
+            json={"paper_ids": [str(a_id), str(b_id)]},
+        )
+        assert patched.status_code == 200
+        assert set(patched.json()["paper_ids"]) == {str(a_id), str(b_id)}
+
+        missing = await client.patch(
+            f"/api/notes/{note_id}",
+            json={"paper_ids": ["00000000-0000-0000-0000-000000000001"]},
+        )
+        assert missing.status_code == 400
+
+        cleared = await client.patch(
+            f"/api/notes/{note_id}",
+            json={"paper_ids": []},
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["paper_ids"] == []
+    finally:
+        await client.delete(f"/api/notes/{note_id}")
+        async with db.SessionLocal() as session:
+            for paper_id in (a_id, b_id):
+                paper = await session.get(Paper, paper_id)
+                if paper is not None:
+                    await session.delete(paper)
+            await session.commit()

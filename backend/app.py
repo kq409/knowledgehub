@@ -13,15 +13,25 @@ from pydantic import BaseModel
 
 from db import close_db, init_db, run_migrations
 from routers.ask import router as ask_router
+from routers.chat import router as chat_router
 from routers.compare import router as compare_router
+from routers.library import router as library_router
+from routers.memories import router as memories_router
 from routers.notes import resume_pending_notes
 from routers.notes import router as notes_router
 from routers.notes import schedule_pipeline_warmup as schedule_note_pipeline_warmup
 from routers.papers import resume_pending_papers, schedule_pipeline_warmup
 from routers.papers import router as papers_router
 from routers.voice_notes import router as voice_notes_router
+from services.agent.gate import EvidenceGate
+from services.agent.loop import ResearchAgent
 from services.ask import AskService
-from services.compare import CompareService
+from services.compare import COMPARE_MAX_TOKENS, CompareService, max_tokens_from_env
+from services.connect import (
+    CONNECT_MAX_TOKENS,
+    ConnectService,
+    connect_min_similarity_from_env,
+)
 from services.embeddings import EmbeddingService
 from services.extraction import ExtractionService
 from services.retrieval import min_similarity_from_env
@@ -64,13 +74,25 @@ async def lifespan(app: FastAPI):
         print(f"⚠️  Warning: Could not connect to LLM: {exc}")
         print(f"   Make sure your LLM server is running at {llm_base_url}")
 
+    # Embeddings often stay on local Ollama (nomic-embed-text) even when the
+    # chat model is a cloud API that has no embedding endpoint.
+    embedding_base_url = os.getenv("EMBEDDING_BASE_URL") or llm_base_url
+    embedding_api_key = os.getenv("EMBEDDING_API_KEY") or llm_api_key
+    embedding_model = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+    if embedding_base_url.rstrip("/") != (llm_base_url or "").rstrip("/"):
+        print(f"🔄 Embeddings via {embedding_base_url} ({embedding_model})...")
+        embedding_client = OpenAI(
+            base_url=embedding_base_url, api_key=embedding_api_key
+        )
+    else:
+        embedding_client = llm_client
+
     app.state.extraction = ExtractionService(
         llm_client=llm_client,
         llm_model=llm_model,
     )
-    embedding_model = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
     app.state.embeddings = EmbeddingService(
-        llm_client=llm_client,
+        llm_client=embedding_client,
         model=embedding_model,
     )
     app.state.ask = AskService(
@@ -79,10 +101,49 @@ async def lifespan(app: FastAPI):
         embeddings=app.state.embeddings,
         min_similarity=min_similarity_from_env(),
     )
+    compare_max_tokens = max_tokens_from_env(
+        "COMPARE_MAX_TOKENS", fallback=COMPARE_MAX_TOKENS
+    )
     app.state.compare = CompareService(
         llm_client=llm_client,
         llm_model=llm_model,
         embeddings=app.state.embeddings,
+        max_tokens=compare_max_tokens,
+    )
+    app.state.connect = ConnectService(
+        llm_client=llm_client,
+        llm_model=llm_model,
+        embeddings=app.state.embeddings,
+        min_similarity=connect_min_similarity_from_env(),
+        max_tokens=max_tokens_from_env("CONNECT_MAX_TOKENS", CONNECT_MAX_TOKENS),
+    )
+    # The agent runs comparisons inside a chat turn, where a slow model hurts
+    # more than it does on the Compare tab, so it gets its own ceiling.
+    agent_compare = CompareService(
+        llm_client=llm_client,
+        llm_model=llm_model,
+        embeddings=app.state.embeddings,
+        max_tokens=max_tokens_from_env(
+            "AGENT_COMPARE_MAX_TOKENS", fallback=compare_max_tokens
+        ),
+    )
+    evidence_gate = EvidenceGate(
+        llm_client=llm_client,
+        llm_model=llm_model,
+        base_url=llm_base_url,
+    )
+    print(
+        "🔍 Evidence gate: deterministic checks"
+        + (" + LLM reviewer" if evidence_gate.uses_judge() else " only")
+    )
+    app.state.agent = ResearchAgent(
+        llm_client=llm_client,
+        llm_model=llm_model,
+        embeddings=app.state.embeddings,
+        gate=evidence_gate,
+        compare=agent_compare,
+        extraction=app.state.extraction,
+        connect=app.state.connect,
     )
     app.state.paper_pipeline = None
     app.state.paper_pipeline_lock = asyncio.Lock()
@@ -151,8 +212,11 @@ app.add_middleware(
 app.include_router(voice_notes_router)
 app.include_router(notes_router)
 app.include_router(papers_router)
+app.include_router(library_router)
 app.include_router(ask_router)
+app.include_router(chat_router)
 app.include_router(compare_router)
+app.include_router(memories_router)
 
 
 @app.get("/api/status")

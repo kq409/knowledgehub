@@ -18,6 +18,7 @@ export function TextBox({
   maxHeight,
   ariaLabel,
   id,
+  onKeyDown,
 }: TextBoxProps) {
   const containerClasses = [
     styles.textBox,
@@ -47,6 +48,7 @@ export function TextBox({
             disabled={isDisabled}
             rows={rows}
             aria-label={ariaLabel}
+            onKeyDown={onKeyDown}
             className={styles.textarea}
           />
         ) : (

@@ -15,8 +15,7 @@ export function SettingsPanel({
   const [isPromptExpanded, setIsPromptExpanded] = useState(false);
 
   return (
-    <Box header="Settings" icon={Settings}>
-      {/* Main LLM Toggle - Always Visible */}
+    <Box header="Note extraction" icon={Settings} compact>
       <div className={styles.toggleSection}>
         <label className={styles.toggleLabel}>
           <input
@@ -35,7 +34,6 @@ export function SettingsPanel({
         </p>
       </div>
 
-      {/* System Prompt - Collapsible Advanced Option */}
       {useLLM && (
         <div className={styles.promptSection}>
           <button

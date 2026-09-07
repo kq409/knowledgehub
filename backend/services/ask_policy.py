@@ -75,10 +75,8 @@ def current_year() -> int:
     return datetime.now(UTC).year
 
 
-def question_names_recent_year(
-    question: str, now_year: int | None = None
-) -> bool:
-    cutoff = (now_year if now_year is not None else current_year())
+def question_names_recent_year(question: str, now_year: int | None = None) -> bool:
+    cutoff = now_year if now_year is not None else current_year()
     window_start = cutoff - FIELD_WIDE_RECENCY_WINDOW
     return any(year >= window_start for year in named_years(question))
 
@@ -119,9 +117,7 @@ def inventory_line(papers: list[LibraryPaper], hits: list[RetrievalHit]) -> str:
     )
 
 
-def _papers_cover_recent_years(
-    papers: list[LibraryPaper], now_year: int
-) -> bool:
+def _papers_cover_recent_years(papers: list[LibraryPaper], now_year: int) -> bool:
     years = library_years(papers)
     if not years:
         return False
@@ -234,8 +230,10 @@ def _closest_match_lines(hits: tuple[RetrievalHit, ...]) -> list[str]:
 def abstain_answer(question: str, decision: AskDecision) -> str:
     chinese = uses_chinese(question)
     years = decision.coverage.years
-    year_text = ", ".join(str(year) for year in years) if years else (
-        "未知" if chinese else "unknown"
+    year_text = (
+        ", ".join(str(year) for year in years)
+        if years
+        else ("未知" if chinese else "unknown")
     )
     paper_count = decision.coverage.paper_count
     closest = _closest_match_lines(decision.citation_hits)
@@ -250,7 +248,7 @@ def abstain_answer(question: str, decision: AskDecision) -> str:
             ]
             if closest:
                 parts.extend(["", "库中最接近的内容：", *closest])
-            parts.extend(["", "库外搜索尚未开放。"])
+            parts.extend(["", "需要领域级结论时，可在配置库外搜索后继续检索网络。"])
             return "\n".join(parts)
         parts = [
             f"Based only on your library ({paper_count} paper(s), years {year_text}).",
@@ -260,7 +258,12 @@ def abstain_answer(question: str, decision: AskDecision) -> str:
         ]
         if closest:
             parts.extend(["", "Closest matches in your library:", *closest])
-        parts.extend(["", "Search outside the library is not available yet."])
+        parts.extend(
+            [
+                "",
+                "For a field-wide answer, search outside the library if web search is configured.",
+            ]
+        )
         return "\n".join(parts)
 
     if chinese:

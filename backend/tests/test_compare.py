@@ -10,10 +10,12 @@ from schemas import (
     normalize_paper_ids,
 )
 from services.compare import (
+    COMPARE_MAX_TOKENS,
     CompareService,
     cells_from_payload,
     dimension_query,
     format_paper_evidence,
+    max_tokens_from_env,
 )
 from services.retrieval import RetrievalHit
 
@@ -127,6 +129,38 @@ def test_map_retries_then_parses_json():
     assert cells["method"] == "ELLA"
     assert cells["dataset"] == ""
     assert client.chat.completions.create.call_count == 2
+
+
+def test_the_token_ceiling_is_per_service():
+    """The agent path runs mid-conversation and can afford a smaller ceiling."""
+    client = MagicMock()
+    client.chat.completions.create.return_value = _completion(
+        json.dumps({"problem": "Control"})
+    )
+    service = CompareService(client, "gemma3:4b", MagicMock(), max_tokens=1024)
+    paper = MagicMock()
+    paper.title = "Paper A"
+
+    service._map_paper(paper, ["problem"], [_hit()])
+
+    assert client.chat.completions.create.call_args.kwargs["max_tokens"] == 1024
+
+
+def test_the_token_ceiling_defaults_to_the_module_constant():
+    service = CompareService(MagicMock(), "gemma3:4b", MagicMock())
+
+    assert service.max_tokens == COMPARE_MAX_TOKENS
+
+
+def test_a_junk_token_ceiling_falls_back(monkeypatch):
+    monkeypatch.setenv("AGENT_COMPARE_MAX_TOKENS", "plenty")
+    assert max_tokens_from_env("AGENT_COMPARE_MAX_TOKENS", fallback=2048) == 2048
+
+    monkeypatch.setenv("AGENT_COMPARE_MAX_TOKENS", "4096")
+    assert max_tokens_from_env("AGENT_COMPARE_MAX_TOKENS", fallback=2048) == 4096
+
+    monkeypatch.delenv("AGENT_COMPARE_MAX_TOKENS")
+    assert max_tokens_from_env("AGENT_COMPARE_MAX_TOKENS", fallback=2048) == 2048
 
 
 def test_map_skips_llm_when_no_paper_hits():

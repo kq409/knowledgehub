@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -33,6 +33,16 @@ class ProcessingStatus(str, enum.Enum):
     failed = "failed"
 
 
+class NoteLinkSource(str, enum.Enum):
+    researcher = "researcher"
+    ai = "ai"
+
+
+class ConnectReasonMode(str, enum.Enum):
+    snippet = "snippet"
+    llm = "llm"
+
+
 class Note(Base):
     __tablename__ = "notes"
 
@@ -60,16 +70,11 @@ class Note(Base):
     original_file: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    paper_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("papers.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
     processing_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=ProcessingStatus.pending.value
     )
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    related_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -81,6 +86,9 @@ class Note(Base):
         default=lambda: datetime.now(UTC),
     )
     chunks: Mapped[list["NoteChunk"]] = relationship(
+        back_populates="note", cascade="all, delete-orphan"
+    )
+    paper_links: Mapped[list["NotePaper"]] = relationship(
         back_populates="note", cascade="all, delete-orphan"
     )
 
@@ -152,6 +160,9 @@ class Paper(Base):
     chunks: Mapped[list["PaperChunk"]] = relationship(
         back_populates="paper", cascade="all, delete-orphan"
     )
+    note_links: Mapped[list["NotePaper"]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan"
+    )
 
 
 class PaperChunk(Base):
@@ -182,6 +193,61 @@ class PaperChunk(Base):
     paper: Mapped[Paper] = relationship(back_populates="chunks")
 
 
+class NotePaper(Base):
+    """A link between a note and a paper (researcher or AI-suggested)."""
+
+    __tablename__ = "note_papers"
+
+    note_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("notes.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    paper_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("papers.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=NoteLinkSource.researcher.value
+    )
+    similarity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    note: Mapped[Note] = relationship(back_populates="paper_links")
+    paper: Mapped[Paper] = relationship(back_populates="note_links")
+
+
+class NotePaperSkip(Base):
+    """An AI-suggested pair the researcher dismissed; auto-link will not re-add it."""
+
+    __tablename__ = "note_paper_skips"
+
+    note_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("notes.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    paper_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("papers.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
 class PaperComparison(Base):
     __tablename__ = "paper_comparisons"
 
@@ -195,6 +261,30 @@ class PaperComparison(Base):
     model: Mapped[str] = mapped_column(String(255), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class AgentMemory(Base):
+    """Cross-session preferences and hypotheses the chat agent can recall."""
+
+    __tablename__ = "agent_memories"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    category: Mapped[str] = mapped_column(String(32), nullable=False, default="other")
+    source_turn: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),

@@ -45,7 +45,9 @@ async def _table_exists(session, name: str) -> bool:
         return False
 
 
-async def _insert_paper(session, title: str, status: str = PaperStatus.ready.value) -> Paper:
+async def _insert_paper(
+    session, title: str, status: str = PaperStatus.ready.value
+) -> Paper:
     paper = Paper(
         title=title,
         original_filename=f"{title}.pdf",

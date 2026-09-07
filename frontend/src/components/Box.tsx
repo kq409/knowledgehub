@@ -10,9 +10,12 @@ export function Box({
   isExpanded = true,
   onToggleExpanded,
   className,
+  compact = false,
 }: BoxProps) {
   return (
-    <div className={`${styles.box} ${className || ''}`}>
+    <div
+      className={`${styles.box} ${compact ? styles.compact : ''} ${className || ''}`}
+    >
       {header && (
         <div className={styles.header}>
           {collapsible ? (

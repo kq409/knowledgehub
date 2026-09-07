@@ -1,7 +1,9 @@
 import os
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
+from uuid import UUID
 
 import pytest
 from dotenv import load_dotenv
@@ -10,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 import db
+from models import Note, NotePaper, NoteSourceType, ProcessingStatus
 from routers.papers import router
 from services.chunking import ParsedChunk
 from services.paper_parser import ParsedPaper
@@ -120,3 +123,39 @@ async def test_reject_non_pdf(client: AsyncClient):
     files = {"file": ("notes.txt", b"not a pdf", "text/plain")}
     response = await client.post("/api/papers", files=files)
     assert response.status_code == 400
+
+
+async def test_list_paper_notes(client: AsyncClient):
+    created = await client.post(
+        "/api/papers",
+        files={"file": ("paper.pdf", b"%PDF-1.4\n%mock\n", "application/pdf")},
+    )
+    if created.status_code not in {201, 202}:
+        pytest.skip("Could not upload a paper for the notes listing test")
+    paper_id = created.json()["id"]
+    note = Note(
+        source_type=NoteSourceType.voice.value,
+        title="Linked listing note",
+        processing_status=ProcessingStatus.ready.value,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    assert db.SessionLocal is not None
+    async with db.SessionLocal() as session:
+        session.add(note)
+        await session.flush()
+        session.add(NotePaper(note_id=note.id, paper_id=UUID(paper_id)))
+        await session.commit()
+        note_id = note.id
+    try:
+        listed = await client.get(f"/api/papers/{paper_id}/notes")
+        assert listed.status_code == 200
+        titles = [item["title"] for item in listed.json()]
+        assert "Linked listing note" in titles
+    finally:
+        async with db.SessionLocal() as session:
+            stored = await session.get(Note, note_id)
+            if stored is not None:
+                await session.delete(stored)
+            await session.commit()
+        await client.delete(f"/api/papers/{paper_id}")

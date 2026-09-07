@@ -11,9 +11,7 @@ from services.ask_policy import (
 from services.retrieval import LibraryPaper, RetrievalHit
 
 PAPER_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
-SOTA_QUESTION = (
-    "What is the SOTA robot learning algorithm so far in 2026?"
-)
+SOTA_QUESTION = "What is the SOTA robot learning algorithm so far in 2026?"
 LIBRARY_QUESTION = "What does ELLA claim about transfer?"
 
 
@@ -41,7 +39,9 @@ def _hit(
 def test_classify_sota_question_as_field_wide():
     assert classify_query(SOTA_QUESTION) is QueryKind.field_wide
     assert classify_query("目前最好的机器人学习算法是什么？") is QueryKind.field_wide
-    assert classify_query("What is the state-of-the-art method?") is QueryKind.field_wide
+    assert (
+        classify_query("What is the state-of-the-art method?") is QueryKind.field_wide
+    )
 
 
 def test_classify_ordinary_library_question():
@@ -52,7 +52,9 @@ def test_classify_ordinary_library_question():
 def test_ella_sota_question_skips_llm_and_suggests_external_search():
     papers = [LibraryPaper(title="ELLA", year=2006)]
     hits = [_hit(), _hit(similarity=0.61)]
-    decision = decide_ask(SOTA_QUESTION, hits, papers, min_similarity=0.35, now_year=2026)
+    decision = decide_ask(
+        SOTA_QUESTION, hits, papers, min_similarity=0.35, now_year=2026
+    )
 
     assert decision.query_kind is QueryKind.field_wide
     assert decision.quality is EvidenceQuality.unsupported
@@ -69,7 +71,7 @@ def test_ella_sota_question_skips_llm_and_suggests_external_search():
     assert "field-wide" in answer.lower() or "SOTA" in answer
     assert "ELLA" in answer
     assert "2006" in answer
-    assert "not available" in answer.lower()
+    assert "search outside" in answer.lower()
 
 
 def test_ordinary_library_question_still_generates():
@@ -135,7 +137,9 @@ def test_field_wide_with_recent_multi_paper_coverage_can_generate():
         _hit(title="B", year=2025, source_id=uuid.uuid4(), similarity=0.77),
         _hit(title="C", year=2026, source_id=uuid.uuid4(), similarity=0.74),
     ]
-    decision = decide_ask(SOTA_QUESTION, hits, papers, min_similarity=0.35, now_year=2026)
+    decision = decide_ask(
+        SOTA_QUESTION, hits, papers, min_similarity=0.35, now_year=2026
+    )
     assert decision.skip_llm is False
     assert decision.quality is EvidenceQuality.ok
     assert decision.suggest_external_search is False
@@ -152,7 +156,9 @@ def test_field_wide_old_library_unsupported_even_with_several_papers():
         _hit(title="B", year=2008, source_id=uuid.uuid4(), similarity=0.66),
         _hit(title="C", year=2010, source_id=uuid.uuid4(), similarity=0.64),
     ]
-    decision = decide_ask(SOTA_QUESTION, hits, papers, min_similarity=0.35, now_year=2026)
+    decision = decide_ask(
+        SOTA_QUESTION, hits, papers, min_similarity=0.35, now_year=2026
+    )
     assert decision.skip_llm is True
     assert decision.suggest_external_search is True
 
@@ -169,7 +175,7 @@ def test_chinese_field_wide_abstain_answer():
     )
     answer = abstain_answer("2026年最先进的机器人学习算法是什么？", decision)
     assert "文献库" in answer
-    assert "库外搜索尚未开放" in answer
+    assert "库外搜索" in answer
 
 
 def test_format_evidence_includes_year_and_inventory():

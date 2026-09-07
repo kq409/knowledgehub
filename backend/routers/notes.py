@@ -20,16 +20,48 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import db
 from db import get_session
-from models import Note, NoteChunk, NoteSourceType, ProcessingStatus, ReviewStatus
+from models import (
+    Note,
+    NoteChunk,
+    NotePaper,
+    NoteSourceType,
+    ProcessingStatus,
+    ReviewStatus,
+)
 from schemas import (
+    ConnectReasonMode,
+    ConnectRequest,
+    ConnectResponse,
     NoteChunkResponse,
     NoteCreate,
+    NoteLinkSource,
+    NotePaperLink,
     NoteResponse,
     NoteStatus,
     NoteUpdate,
 )
 from schemas import (
     NoteSourceType as NoteSourceTypeSchema,
+)
+from services.connect import (
+    ConnectError,
+    ConnectNotFoundError,
+    ConnectNotReadyError,
+    ConnectService,
+    empty_connect_response,
+    response_from_stored,
+)
+from services.library_ingest import (
+    create_pending_handwritten_note,
+    validate_pdf_bytes,
+)
+from services.note_links import (
+    NoteLinkError,
+    links_by_note_ids,
+    list_links_for_note,
+    list_paper_ids_for_note,
+    list_skipped_paper_ids,
+    replace_note_papers,
 )
 from services.note_parser import NoteParseError, NotePdfParser
 from services.note_pipeline import (
@@ -40,13 +72,21 @@ from services.note_pipeline import (
     chunks_from_extracted_text,
     chunks_from_voice_note,
     mark_note_status,
-    note_file_path,
 )
 
 router = APIRouter(prefix="/api/notes", tags=["notes"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
-MAX_PDF_BYTES = 50 * 1024 * 1024
+
+
+def get_connect_service(request: Request) -> ConnectService:
+    service = getattr(request.app.state, "connect", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Connect service not ready")
+    return service
+
+
+ConnectDep = Annotated[ConnectService, Depends(get_connect_service)]
 
 VOICE_REEMBED_FIELDS = {
     "title",
@@ -60,7 +100,57 @@ VOICE_REEMBED_FIELDS = {
 HANDWRITTEN_REEMBED_FIELDS = {"extracted_text"}
 
 
-def to_response(note: Note, chunk_count: int) -> NoteResponse:
+def _parse_related_at(note: Note) -> datetime | None:
+    stored = note.related_result
+    if not isinstance(stored, dict):
+        return None
+    raw = stored.get("generated_at")
+    if not raw:
+        return None
+    if isinstance(raw, datetime):
+        return raw
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def schema_links(rows: list[NotePaper] | None) -> list[NotePaperLink]:
+    links: list[NotePaperLink] = []
+    for row in rows or []:
+        reason_mode = None
+        if row.reason_mode:
+            try:
+                reason_mode = ConnectReasonMode(row.reason_mode)
+            except ValueError:
+                reason_mode = None
+        try:
+            source = NoteLinkSource(row.source)
+        except ValueError:
+            source = NoteLinkSource.researcher
+        links.append(
+            NotePaperLink(
+                paper_id=row.paper_id,
+                source=source,
+                similarity=row.similarity,
+                snippet=row.snippet,
+                reason=row.reason,
+                reason_mode=reason_mode,
+            )
+        )
+    return links
+
+
+def to_response(
+    note: Note,
+    chunk_count: int,
+    paper_ids: list[uuid.UUID] | None = None,
+    paper_links: list[NotePaperLink] | None = None,
+) -> NoteResponse:
+    links = list(paper_links or [])
+    ids = (
+        list(paper_ids) if paper_ids is not None else [item.paper_id for item in links]
+    )
     return NoteResponse(
         id=note.id,
         source_type=NoteSourceTypeSchema(note.source_type),
@@ -79,12 +169,26 @@ def to_response(note: Note, chunk_count: int) -> NoteResponse:
         original_filename=note.original_filename,
         page_count=note.page_count,
         extracted_text=note.extracted_text,
-        paper_id=note.paper_id,
+        paper_ids=ids,
+        paper_links=links,
+        related_generated_at=_parse_related_at(note),
         processing_status=NoteStatus(note.processing_status),
         processing_error=note.processing_error,
         chunk_count=chunk_count,
         created_at=note.created_at,
         updated_at=note.updated_at,
+    )
+
+
+def to_response_with_links(
+    note: Note, chunk_count: int, rows: list[NotePaper] | None = None
+) -> NoteResponse:
+    links = schema_links(rows)
+    return to_response(
+        note,
+        chunk_count,
+        [item.paper_id for item in links],
+        links,
     )
 
 
@@ -136,6 +240,62 @@ def schedule_note_processing(app: FastAPI, note_id: uuid.UUID) -> None:
     task.add_done_callback(jobs.discard)
 
 
+def schedule_connect(app: FastAPI, note_id: uuid.UUID) -> None:
+    if getattr(app.state, "connect", None) is None:
+        return
+    jobs: set[asyncio.Task] = getattr(app.state, "connect_jobs", None)
+    if jobs is None:
+        jobs = set()
+        app.state.connect_jobs = jobs
+    task = asyncio.create_task(_run_connect(note_id, app))
+    jobs.add(task)
+    task.add_done_callback(jobs.discard)
+
+
+async def _store_empty_related(note_id: uuid.UUID, app: FastAPI) -> None:
+    if db.SessionLocal is None:
+        return
+    try:
+        async with db.SessionLocal() as session:
+            note = await session.get(Note, note_id)
+            if note is None or note.related_result:
+                return
+            linked = await list_paper_ids_for_note(session, note_id)
+            skipped = await list_skipped_paper_ids(session, note_id)
+            connect = getattr(app.state, "connect", None)
+            model = connect.llm_model if connect is not None else None
+            note.related_result = empty_connect_response(
+                note_id,
+                reason_mode=ConnectReasonMode.llm,
+                linked_paper_ids=linked,
+                skipped_paper_ids=list(skipped),
+                model=model,
+            ).model_dump(mode="json")
+            await session.commit()
+    except Exception as exc:
+        print(
+            f"⚠️  Could not store empty related result for {note_id}: {exc}",
+            flush=True,
+        )
+
+
+async def _run_connect(note_id: uuid.UUID, app: FastAPI) -> None:
+    connect = getattr(app.state, "connect", None)
+    if connect is None or db.SessionLocal is None:
+        return
+    try:
+        async with db.SessionLocal() as session:
+            await connect.connect(session, note_id)
+        print(f"🔗 Related papers linked for note {note_id}", flush=True)
+    except ConnectNotReadyError:
+        print(f"⚠️  Connect skipped; note {note_id} is not ready", flush=True)
+    except ConnectNotFoundError:
+        print(f"⚠️  Connect skipped; note {note_id} was deleted", flush=True)
+    except Exception as exc:
+        print(f"⚠️  Connect after note {note_id} failed: {exc}", flush=True)
+        await _store_empty_related(note_id, app)
+
+
 async def process_note(note_id: uuid.UUID, app: FastAPI) -> None:
     if db.SessionLocal is None:
         print("❌ Note processing skipped: database is not initialized", flush=True)
@@ -182,6 +342,7 @@ async def process_note(note_id: uuid.UUID, app: FastAPI) -> None:
                         return
                     await apply_pdf_parse_result(session, note, parsed, embeddings)
             print(f"✅ Note processed: {note_id}", flush=True)
+            schedule_connect(app, note_id)
             return
 
         async with db.SessionLocal() as session:
@@ -192,6 +353,7 @@ async def process_note(note_id: uuid.UUID, app: FastAPI) -> None:
             embeddings = await asyncio.to_thread(pipeline.embed_chunks, chunks)
             await apply_text_chunks(session, note, chunks, embeddings)
         print(f"✅ Note processed: {note_id}", flush=True)
+        schedule_connect(app, note_id)
     except Exception as exc:
         print(f"❌ Note processing failed: {exc}", flush=True)
         async with db.SessionLocal() as session:
@@ -263,11 +425,17 @@ async def create_note(
         processing_status=ProcessingStatus.pending.value,
     )
     session.add(note)
+    await session.flush()
+    try:
+        await replace_note_papers(session, note.id, payload.paper_ids)
+    except NoteLinkError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await session.commit()
     await session.refresh(note)
     print(f"⏳ Queued voice note for embedding: {note.title} ({note.id})", flush=True)
     schedule_note_processing(request.app, note.id)
-    return to_response(note, 0)
+    links = await list_links_for_note(session, note.id)
+    return to_response_with_links(note, 0, links)
 
 
 @router.post("/upload", response_model=NoteResponse, status_code=202)
@@ -276,43 +444,18 @@ async def upload_note(
     session: SessionDep,
     file: Annotated[UploadFile, File()],
 ):
-    filename = file.filename or "note.pdf"
-    suffix = Path(filename).suffix.lower()
-    content_type = (file.content_type or "").lower()
-    if suffix != ".pdf" and "pdf" not in content_type:
-        raise HTTPException(status_code=400, detail="Please upload a PDF file")
-
     content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
-    if len(content) > MAX_PDF_BYTES:
-        raise HTTPException(status_code=400, detail="PDF is larger than 50MB")
+    try:
+        filename = validate_pdf_bytes(
+            file.filename,
+            file.content_type,
+            content,
+            fallback_name="note.pdf",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    note_id = uuid.uuid4()
-    dest = note_file_path(note_id)
-    dest.write_bytes(content)
-
-    note = Note(
-        id=note_id,
-        source_type=NoteSourceType.handwritten.value,
-        title=Path(filename).stem or "Untitled note",
-        summary="",
-        observations=[],
-        hypotheses=[],
-        questions=[],
-        next_steps=[],
-        tags=[],
-        raw_transcript="",
-        cleaned_transcript="",
-        original_filename=filename,
-        original_file=str(dest),
-        review_status=ReviewStatus.accepted.value,
-        processing_status=ProcessingStatus.pending.value,
-    )
-    session.add(note)
-    await session.commit()
-    await session.refresh(note)
-
+    note = await create_pending_handwritten_note(session, content, filename)
     print(f"⏳ Queued PDF note for processing: {note.title} ({note.id})", flush=True)
     schedule_note_processing(request.app, note.id)
     return to_response(note, 0)
@@ -340,7 +483,12 @@ async def list_notes(
     if source_type is not None:
         query = query.where(Note.source_type == source_type.value)
     result = await session.execute(query)
-    return [to_response(note, int(count)) for note, count in result.all()]
+    rows = result.all()
+    links_map = await links_by_note_ids(session, [note.id for note, _ in rows])
+    return [
+        to_response_with_links(note, int(count), links_map.get(note.id, []))
+        for note, count in rows
+    ]
 
 
 @router.get("/{note_id}", response_model=NoteResponse)
@@ -348,7 +496,11 @@ async def get_note(note_id: uuid.UUID, session: SessionDep):
     note = await session.get(Note, note_id)
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
-    return to_response(note, await chunk_count_for(session, note.id))
+    return to_response_with_links(
+        note,
+        await chunk_count_for(session, note.id),
+        await list_links_for_note(session, note.id),
+    )
 
 
 @router.get("/{note_id}/chunks", response_model=list[NoteChunkResponse])
@@ -381,6 +533,46 @@ async def download_note_file(note_id: uuid.UUID, session: SessionDep):
     )
 
 
+@router.post("/{note_id}/related", response_model=ConnectResponse)
+async def connect_note_to_literature(
+    note_id: uuid.UUID,
+    session: SessionDep,
+    connect_service: ConnectDep,
+    payload: ConnectRequest | None = None,
+):
+    try:
+        return await connect_service.connect(
+            session, note_id, payload or ConnectRequest()
+        )
+    except ConnectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConnectNotReadyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConnectError as exc:
+        print(f"❌ Connect generation failed: {exc}")
+        raise HTTPException(
+            status_code=502,
+            detail="Could not find related papers. Check the backend terminal for details.",
+        ) from exc
+    except Exception as exc:
+        print(f"❌ Connect failed: {exc}")
+        raise HTTPException(
+            status_code=502,
+            detail="Connect failed. Check the backend terminal for details.",
+        ) from exc
+
+
+@router.get("/{note_id}/related", response_model=ConnectResponse)
+async def get_related_papers(note_id: uuid.UUID, session: SessionDep):
+    note = await session.get(Note, note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="Note not found")
+    stored = response_from_stored(note)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="No related-papers run stored yet")
+    return stored
+
+
 @router.patch("/{note_id}", response_model=NoteResponse)
 async def update_note(
     request: Request,
@@ -395,10 +587,16 @@ async def update_note(
     updates = payload.model_dump(exclude_unset=True)
     if "review_status" in updates and updates["review_status"] is not None:
         updates["review_status"] = updates["review_status"].value
+    paper_ids_update = updates.pop("paper_ids", None)
 
     reembed = _should_reembed(note, updates)
     for field, value in updates.items():
         setattr(note, field, value)
+    if paper_ids_update is not None:
+        try:
+            await replace_note_papers(session, note.id, paper_ids_update)
+        except NoteLinkError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if reembed:
         note.processing_status = ProcessingStatus.pending.value
         note.processing_error = None
@@ -407,7 +605,11 @@ async def update_note(
     await session.refresh(note)
     if reembed:
         schedule_note_processing(request.app, note.id)
-    return to_response(note, await chunk_count_for(session, note.id))
+    return to_response_with_links(
+        note,
+        await chunk_count_for(session, note.id),
+        await list_links_for_note(session, note.id),
+    )
 
 
 @router.delete("/{note_id}", status_code=204)

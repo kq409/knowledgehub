@@ -41,6 +41,9 @@ function sourceLabel(sourceType: CitationSourceType): string {
   if (sourceType === 'voice') {
     return 'Voice';
   }
+  if (sourceType === 'web') {
+    return 'Web';
+  }
   return 'Handwritten';
 }
 
@@ -51,10 +54,16 @@ function badgeClass(sourceType: CitationSourceType): string {
   if (sourceType === 'voice') {
     return styles.voice ?? '';
   }
+  if (sourceType === 'web') {
+    return styles.web ?? '';
+  }
   return styles.handwritten ?? '';
 }
 
 function citationMeta(citation: AskCitation): string {
+  if (citation.source_type === 'web') {
+    return citation.url ?? '';
+  }
   const parts: string[] = [];
   if (citation.year != null) {
     parts.push(String(citation.year));
@@ -90,7 +99,7 @@ export function AskResearch() {
     (includePapers || includeVoiceNotes || includeHandwrittenNotes) &&
     !isAsking;
 
-  const ask = useCallback(async () => {
+  const ask = useCallback(async (externalSearch = false) => {
     const trimmed = question.trim();
     if (!trimmed) {
       setError('Enter a question first.');
@@ -112,6 +121,7 @@ export function AskResearch() {
           include_papers: includePapers,
           include_voice_notes: includeVoiceNotes,
           include_handwritten_notes: includeHandwrittenNotes,
+          external_search: externalSearch,
         }),
       });
       if (!response.ok) {
@@ -222,15 +232,33 @@ export function AskResearch() {
               {` · ${coverageLabel(result.library_coverage)}`}
               {` · ${result.query_kind === 'field_wide' ? 'field-wide question' : 'library question'}`}
             </p>
-            {result.suggest_external_search && (
+            {result.suggest_external_search &&
+              result.external_search_status !== 'ran' && (
               <button
                 type="button"
                 className={styles.secondaryButton}
-                disabled
-                title="Coming soon"
+                disabled={
+                  isAsking ||
+                  result.external_search_status === 'unavailable'
+                }
+                title={
+                  result.external_search_status === 'unavailable'
+                    ? 'Set WEB_SEARCH_API_KEY to search the web'
+                    : result.external_search_status === 'failed'
+                      ? 'Previous web search failed. Try again.'
+                      : 'Search the web for sources outside your library'
+                }
+                onClick={() => void ask(true)}
               >
-                Search outside library (coming soon)
+                {result.external_search_status === 'failed'
+                  ? 'Retry web search'
+                  : result.external_search_status === 'unavailable'
+                    ? 'Search outside library (not configured)'
+                    : 'Search outside library'}
               </button>
+            )}
+            {result.external_search_status === 'ran' && (
+              <p className={styles.modelMeta}>Included web sources, labelled separately from the library.</p>
             )}
           </Box>
 
@@ -240,7 +268,10 @@ export function AskResearch() {
             ) : (
               <ol className={styles.citations}>
                 {result.citations.map((citation) => (
-                  <li key={citation.chunk_id} className={styles.citation}>
+                  <li
+                    key={citation.url ?? citation.chunk_id ?? String(citation.index)}
+                    className={styles.citation}
+                  >
                     <div className={styles.citationHeader}>
                       <span className={styles.index}>[{citation.index}]</span>
                       <span
@@ -248,9 +279,20 @@ export function AskResearch() {
                       >
                         {sourceLabel(citation.source_type)}
                       </span>
-                      <span className={styles.citationTitle}>
-                        {citation.title}
-                      </span>
+                      {citation.url ? (
+                        <a
+                          className={styles.citationTitle}
+                          href={citation.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {citation.title}
+                        </a>
+                      ) : (
+                        <span className={styles.citationTitle}>
+                          {citation.title}
+                        </span>
+                      )}
                     </div>
                     <p className={styles.citationMeta}>{citationMeta(citation)}</p>
                     <p className={styles.snippet}>{citation.snippet}</p>

@@ -91,15 +91,25 @@ class TranscriptionService:
 
         prompt_to_use = system_prompt if system_prompt else SYSTEM_PROMPT
         print("🤖 Cleaning with LLM...")
+        from services.llm_chat import effort_from_env, with_chat_extras
+
+        effort = effort_from_env(
+            "VOICE_REASONING_EFFORT", "LLM_REASONING_EFFORT", default="none"
+        )
         return self.llm_client.chat.completions.create(
-            model=self.llm_model,
-            messages=[
-                {"role": "system", "content": prompt_to_use},
-                {"role": "user", "content": text},
-            ],
-            temperature=0.3,
-            max_tokens=200,
-            stream=True,
+            **with_chat_extras(
+                {
+                    "model": self.llm_model,
+                    "messages": [
+                        {"role": "system", "content": prompt_to_use},
+                        {"role": "user", "content": text},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 200,
+                    "stream": True,
+                },
+                effort=effort,
+            )
         )
 
     def iter_clean_tokens(self, stream) -> Iterator[str]:

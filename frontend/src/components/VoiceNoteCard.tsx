@@ -1,6 +1,8 @@
 import { NotebookPen, Copy, Check } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import styles from './VoiceNoteCard.module.css';
-import type { ReviewStatus, VoiceNoteCardProps } from '../types';
+import { RelatedPapersPanel } from './RelatedPapers';
+import type { Paper, ReviewStatus, VoiceNoteCardProps } from '../types';
 import { Box } from './Box';
 import { TextBox } from './TextBox';
 import { Spinner } from './Spinner';
@@ -45,6 +47,71 @@ export function VoiceNoteCard({
   onCopy,
   onSetStatus,
 }: VoiceNoteCardProps) {
+  const [papers, setPapers] = useState<Paper[]>([]);
+  const paperIds = note.paper_ids ?? [];
+  const linkByPaper = new Map(
+    (note.paper_links ?? []).map((link) => [link.paper_id, link])
+  );
+  const noteRef = useRef(note);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    noteRef.current = note;
+    onChangeRef.current = onChange;
+  });
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const response = await fetch('/api/papers');
+        if (!response.ok) {
+          return;
+        }
+        setPapers((await response.json()) as Paper[]);
+      } catch {
+        // Linking is optional; the note still saves without the paper list.
+      }
+    };
+    void load();
+  }, []);
+
+  useEffect(() => {
+    if (!note.id) {
+      return;
+    }
+    const status = note.processing_status;
+    const waitingProcess = status === 'pending' || status === 'processing';
+    const updatedAt = note.updated_at
+      ? new Date(note.updated_at).getTime()
+      : Date.now();
+    const waitingRelated =
+      status === 'ready' &&
+      !note.related_generated_at &&
+      Date.now() - updatedAt < 90_000;
+    if (!waitingProcess && !waitingRelated) {
+      return;
+    }
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/notes/${note.id}`);
+        if (!response.ok) {
+          return;
+        }
+        const body = (await response.json()) as VoiceNoteCardProps['note'];
+        const current = noteRef.current;
+        onChangeRef.current({
+          ...current,
+          paper_ids: body.paper_ids,
+          paper_links: body.paper_links,
+          processing_status: body.processing_status,
+          related_generated_at: body.related_generated_at,
+        });
+      } catch {
+        // Keep the editor usable if polling fails.
+      }
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [note.id, note.processing_status, note.related_generated_at, note.updated_at]);
+
   const updateField = <K extends keyof VoiceNoteCardProps['note']>(
     key: K,
     value: VoiceNoteCardProps['note'][K]
@@ -114,6 +181,58 @@ export function VoiceNoteCard({
               />
             </div>
           ))}
+
+          <label className={styles.fieldLabel} id="voice-note-papers-label">
+            Linked papers
+            <span className={styles.hint}>optional</span>
+          </label>
+          {papers.length === 0 ? (
+            <p className={styles.hint}>No papers in the library yet.</p>
+          ) : (
+            <ul className={styles.checkList} aria-labelledby="voice-note-papers-label">
+              {papers.map((paper) => (
+                <li key={paper.id}>
+                  <label className={styles.checkItem}>
+                    <input
+                      type="checkbox"
+                      checked={paperIds.includes(paper.id)}
+                      onChange={() => {
+                        const next = paperIds.includes(paper.id)
+                          ? paperIds.filter((id) => id !== paper.id)
+                          : [...paperIds, paper.id];
+                        updateField('paper_ids', next);
+                      }}
+                    />
+                    <span>
+                      {paper.title}
+                      {linkByPaper.get(paper.id)?.source === 'ai' && (
+                        <span className={styles.aiBadge}> AI</span>
+                      )}
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <RelatedPapersPanel
+            noteId={note.id}
+            isReady={note.processing_status === 'ready'}
+            relatedGeneratedAt={note.related_generated_at}
+            updatedAt={note.updated_at}
+            paperLinks={note.paper_links ?? []}
+            papers={papers}
+            onNoteUpdate={(updated) => {
+              onChange({
+                ...note,
+                paper_ids: updated.paper_ids,
+                paper_links: updated.paper_links,
+                processing_status: updated.processing_status,
+                related_generated_at: updated.related_generated_at,
+                updated_at: updated.updated_at,
+              });
+            }}
+          />
 
           <div className={styles.actions}>
             <button

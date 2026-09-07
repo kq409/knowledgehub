@@ -52,7 +52,7 @@ services:
       POSTGRES_PASSWORD: researchpilot
       POSTGRES_DB: researchpilot
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - researchpilot-postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -84,7 +84,8 @@ services:
     environment:
       JAVA_OPTS: "-Xmx2g"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8070/api/isalive || exit 1"]
+      test:
+        ["CMD-SHELL", "curl -sf http://localhost:8070/api/isalive || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 18

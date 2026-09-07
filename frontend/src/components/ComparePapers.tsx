@@ -2,19 +2,19 @@ import { Columns2, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import styles from './ComparePapers.module.css';
 import type {
-  CitationSourceType,
-  CompareCitation,
   CompareResponse,
   CompareSummary,
   DefaultCompareDimension,
   LibraryNote,
   Paper,
 } from '../types';
-import {
-  DEFAULT_COMPARE_DIMENSIONS,
-  dimensionLabel,
-} from '../types';
+import { DEFAULT_COMPARE_DIMENSIONS, dimensionLabel } from '../types';
 import { Box } from './Box';
+import {
+  CompareCitationList,
+  CompareSynthesisView,
+  CompareTable,
+} from './CompareResult';
 import { Spinner } from './Spinner';
 
 const MAX_PAPERS = 4;
@@ -49,40 +49,6 @@ async function readErrorDetail(response: Response): Promise<string> {
     // Response was not JSON.
   }
   return text || `Request failed (${response.status})`;
-}
-
-function sourceLabel(sourceType: CitationSourceType): string {
-  if (sourceType === 'paper') {
-    return 'Paper';
-  }
-  if (sourceType === 'voice') {
-    return 'Voice note';
-  }
-  return 'Handwritten note';
-}
-
-function badgeClass(sourceType: CitationSourceType): string {
-  if (sourceType === 'paper') {
-    return styles.paper ?? '';
-  }
-  if (sourceType === 'voice') {
-    return styles.voice ?? '';
-  }
-  return styles.handwritten ?? '';
-}
-
-function citationMeta(citation: CompareCitation): string {
-  const parts: string[] = [];
-  if (citation.year != null) {
-    parts.push(String(citation.year));
-  }
-  if (citation.page != null) {
-    parts.push(`p. ${citation.page}`);
-  }
-  if (citation.section) {
-    parts.push(citation.section);
-  }
-  return parts.join(' · ');
 }
 
 const ALL_DEFAULTS_ON = Object.fromEntries(
@@ -148,12 +114,14 @@ export function ComparePapers() {
   const notesByPaper = useMemo(() => {
     const map = new Map<string, LibraryNote[]>();
     for (const note of notes) {
-      if (!note.paper_id || note.processing_status !== 'ready') {
+      if (note.processing_status !== 'ready' || !note.paper_ids.length) {
         continue;
       }
-      const list = map.get(note.paper_id) ?? [];
-      list.push(note);
-      map.set(note.paper_id, list);
+      for (const paperId of note.paper_ids) {
+        const list = map.get(paperId) ?? [];
+        list.push(note);
+        map.set(paperId, list);
+      }
     }
     return map;
   }, [notes]);
@@ -254,19 +222,6 @@ export function ComparePapers() {
     },
     [result, loadHistory]
   );
-
-  const citationsByPaper = useMemo(() => {
-    if (!result) {
-      return new Map<string, CompareCitation[]>();
-    }
-    const map = new Map<string, CompareCitation[]>();
-    for (const citation of result.citations) {
-      const list = map.get(citation.paper_id) ?? [];
-      list.push(citation);
-      map.set(citation.paper_id, list);
-    }
-    return map;
-  }, [result]);
 
   return (
     <div className={styles.compare}>
@@ -430,96 +385,15 @@ export function ComparePapers() {
       {!isComparing && result && (
         <>
           <Box header="Comparison table">
-            <div className={styles.tableWrap}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>Dimension</th>
-                    {result.papers.map((paper) => (
-                      <th key={paper.paper_id}>
-                        {paper.title}
-                        {paper.year != null ? ` (${paper.year})` : ''}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.dimensions.map((dim) => (
-                    <tr key={dim}>
-                      <th>{dimensionLabel(dim)}</th>
-                      {result.papers.map((paper) => (
-                        <td key={`${paper.paper_id}-${dim}`}>
-                          {paper.values[dim] || '—'}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className={styles.modelMeta}>
-              {result.model} · {result.prompt_version}
-            </p>
+            <CompareTable result={result} />
           </Box>
 
           <Box header="Synthesis">
-            <h3 className={styles.synthTitle}>Agreements</h3>
-            <p className={styles.answer}>
-              {result.synthesis.agreements || '—'}
-            </p>
-            <h3 className={styles.synthTitle}>Disagreements</h3>
-            <p className={styles.answer}>
-              {result.synthesis.disagreements || '—'}
-            </p>
-            <h3 className={styles.synthTitle}>Research gap</h3>
-            <p className={styles.answer}>
-              {result.synthesis.research_gap || '—'}
-            </p>
+            <CompareSynthesisView synthesis={result.synthesis} />
           </Box>
 
           <Box header="Citations">
-            {result.citations.length === 0 ? (
-              <p className={styles.empty}>No matching chunks were retrieved.</p>
-            ) : (
-              result.papers.map((paper) => {
-                const group = citationsByPaper.get(paper.paper_id) ?? [];
-                if (group.length === 0) {
-                  return null;
-                }
-                return (
-                  <div key={paper.paper_id} className={styles.citationGroup}>
-                    <h3 className={styles.synthTitle}>{paper.title}</h3>
-                    <ol className={styles.citations}>
-                      {group.map((citation) => (
-                        <li key={citation.chunk_id} className={styles.citation}>
-                          <div className={styles.citationHeader}>
-                            <span className={styles.index}>
-                              [{citation.index}]
-                            </span>
-                            <span
-                              className={`${styles.badge} ${badgeClass(
-                                citation.source_type
-                              )}`}
-                            >
-                              {sourceLabel(citation.source_type)}
-                            </span>
-                            <span className={styles.citationTitle}>
-                              {citation.title}
-                            </span>
-                          </div>
-                          {citationMeta(citation) && (
-                            <p className={styles.citationMeta}>
-                              {citationMeta(citation)}
-                            </p>
-                          )}
-                          <p className={styles.snippet}>{citation.snippet}</p>
-                        </li>
-                      ))}
-                    </ol>
-                  </div>
-                );
-              })
-            )}
+            <CompareCitationList result={result} />
           </Box>
         </>
       )}

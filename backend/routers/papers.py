@@ -20,20 +20,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import db
 from db import get_session
 from models import Paper, PaperChunk, PaperStatus
-from schemas import PaperChunkResponse, PaperResponse, PaperUpdate
+from routers.notes import to_response_with_links as note_to_response
+from schemas import NoteResponse, PaperChunkResponse, PaperResponse, PaperUpdate
+from services.library_ingest import create_pending_paper, validate_pdf_bytes
+from services.note_links import links_by_note_ids, notes_linked_to_paper
+from services.note_pipeline import chunk_count_for as note_chunk_count_for
 from services.paper_parser import PaperParser
 from services.paper_pipeline import (
     PaperPipeline,
     apply_parse_result,
     chunk_count_for,
     mark_paper_status,
-    paper_file_path,
 )
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
-MAX_PDF_BYTES = 50 * 1024 * 1024
 
 
 def to_response(paper: Paper, chunk_count: int) -> PaperResponse:
@@ -188,35 +190,18 @@ async def upload_paper(
     session: SessionDep,
     file: Annotated[UploadFile, File()],
 ):
-    filename = file.filename or "paper.pdf"
-    suffix = Path(filename).suffix.lower()
-    content_type = (file.content_type or "").lower()
-    if suffix != ".pdf" and "pdf" not in content_type:
-        raise HTTPException(status_code=400, detail="Please upload a PDF file")
-
     content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
-    if len(content) > MAX_PDF_BYTES:
-        raise HTTPException(status_code=400, detail="PDF is larger than 50MB")
+    try:
+        filename = validate_pdf_bytes(
+            file.filename,
+            file.content_type,
+            content,
+            fallback_name="paper.pdf",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    paper_id = uuid.uuid4()
-    dest = paper_file_path(paper_id)
-    dest.write_bytes(content)
-
-    paper = Paper(
-        id=paper_id,
-        title=Path(filename).stem or "Untitled paper",
-        authors=[],
-        tags=[],
-        original_filename=filename,
-        original_file=str(dest),
-        processing_status=PaperStatus.pending.value,
-    )
-    session.add(paper)
-    await session.commit()
-    await session.refresh(paper)
-
+    paper = await create_pending_paper(session, content, filename)
     print(f"⏳ Queued paper for processing: {paper.title} ({paper.id})", flush=True)
     schedule_paper_processing(request.app, paper.id)
     return to_response(paper, 0)
@@ -260,6 +245,20 @@ async def list_paper_chunks(paper_id: uuid.UUID, session: SessionDep):
         .order_by(PaperChunk.chunk_index.asc())
     )
     return list(result.scalars().all())
+
+
+@router.get("/{paper_id}/notes", response_model=list[NoteResponse])
+async def list_paper_notes(paper_id: uuid.UUID, session: SessionDep):
+    paper = await session.get(Paper, paper_id)
+    if paper is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    notes = await notes_linked_to_paper(session, paper_id)
+    links_map = await links_by_note_ids(session, [note.id for note in notes])
+    responses: list[NoteResponse] = []
+    for note in notes:
+        count = await note_chunk_count_for(session, note.id)
+        responses.append(note_to_response(note, count, links_map.get(note.id, [])))
+    return responses
 
 
 @router.get("/{paper_id}/file")

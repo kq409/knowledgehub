@@ -2,6 +2,21 @@ export type RecordingState = 'idle' | 'recording' | 'processing';
 
 export type ReviewStatus = 'generated' | 'draft' | 'reviewed' | 'accepted';
 
+export type ProcessingStatus = 'pending' | 'processing' | 'ready' | 'failed';
+
+export type NoteLinkSource = 'researcher' | 'ai';
+
+export type ConnectReasonMode = 'snippet' | 'llm';
+
+export interface NotePaperLink {
+  paper_id: string;
+  source: NoteLinkSource;
+  similarity: number | null;
+  snippet: string | null;
+  reason: string | null;
+  reason_mode: ConnectReasonMode | null;
+}
+
 export interface StructuredNoteFields {
   title: string;
   summary: string;
@@ -19,6 +34,11 @@ export interface VoiceNoteDraft extends StructuredNoteFields {
   review_status: ReviewStatus;
   model?: string | null;
   prompt_version?: string | null;
+  paper_ids?: string[];
+  paper_links?: NotePaperLink[];
+  processing_status?: ProcessingStatus;
+  related_generated_at?: string | null;
+  updated_at?: string;
 }
 
 export interface VoiceNote extends VoiceNoteDraft {
@@ -109,8 +129,6 @@ export interface VoiceNoteListProps {
   onDelete: (id: string) => void;
 }
 
-export type ProcessingStatus = 'pending' | 'processing' | 'ready' | 'failed';
-
 export type PaperStatus = ProcessingStatus;
 
 export type NoteSourceType = 'voice' | 'handwritten';
@@ -126,7 +144,9 @@ export interface LibraryNote extends StructuredNoteFields {
   original_filename: string | null;
   page_count: number | null;
   extracted_text: string | null;
-  paper_id: string | null;
+  paper_ids: string[];
+  paper_links: NotePaperLink[];
+  related_generated_at: string | null;
   processing_status: ProcessingStatus;
   processing_error: string | null;
   chunk_count: number;
@@ -151,23 +171,49 @@ export interface Paper {
   updated_at: string;
 }
 
-export type CitationSourceType = 'paper' | 'voice' | 'handwritten';
+export interface RelatedPaper {
+  paper_id: string;
+  title: string;
+  year: number | null;
+  similarity: number;
+  snippet: string;
+  reason: string;
+  reason_mode: ConnectReasonMode;
+  linked: boolean;
+  source: NoteLinkSource | null;
+  page: number | null;
+  section: string | null;
+}
+
+export interface ConnectResponse {
+  note_id: string;
+  reason_mode: ConnectReasonMode;
+  papers: RelatedPaper[];
+  linked_paper_ids: string[];
+  skipped_paper_ids: string[];
+  model: string | null;
+  prompt_version: string;
+  generated_at: string;
+}
+
+export type CitationSourceType = 'paper' | 'voice' | 'handwritten' | 'web';
 
 export type QueryKind = 'library' | 'field_wide';
 
-export type ExternalSearchStatus = 'unavailable';
+export type ExternalSearchStatus = 'unavailable' | 'ready' | 'ran' | 'failed';
 
 export interface AskCitation {
   index: number;
   source_type: CitationSourceType;
-  source_id: string;
-  chunk_id: string;
+  source_id: string | null;
+  chunk_id: string | null;
   title: string;
   page: number | null;
   section: string | null;
   year: number | null;
   snippet: string;
   similarity: number;
+  url?: string | null;
 }
 
 export interface LibraryCoverage {
@@ -189,7 +235,193 @@ export interface AskResponse {
   external_search_status: ExternalSearchStatus;
 }
 
-export type AppTab = 'voice' | 'notes' | 'papers' | 'ask' | 'compare';
+export type WorkspaceState =
+  | { module: 'compare'; result: CompareResponse }
+  | { module: 'voice_notes' };
+
+/**
+ * Evidence the agent read through a tool. `similarity` is null for chunks it
+ * read in source order rather than retrieved by search.
+ */
+export interface ChatCitation extends Omit<AskCitation, 'similarity'> {
+  similarity: number | null;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export type PermissionDecision = 'allow' | 'deny' | 'ask' | 'skip';
+
+export interface ChatPermission {
+  decision: PermissionDecision;
+  reason: string;
+}
+
+export interface ChatToolStep {
+  name: string;
+  arguments: Record<string, unknown>;
+  summary: string | null;
+  permission: ChatPermission | null;
+  agentId: string;
+}
+
+export type GateStatus =
+  | 'supported'
+  | 'unsupported'
+  | 'unchecked'
+  | 'retrying';
+
+export interface ChatGateProblem {
+  kind: string;
+  detail: string;
+}
+
+export interface ChatVerdict {
+  status: GateStatus;
+  reason: string;
+  checked_by: string;
+  problems: ChatGateProblem[];
+}
+
+/** Structured tool output the chat renders itself instead of reading as prose. */
+export interface ComparisonArtifact {
+  kind: 'comparison';
+  tool: string;
+  data: CompareResponse;
+}
+
+export interface SkillArtifact {
+  kind: 'skill';
+  tool: string;
+  data: { name: string; description: string };
+}
+
+export interface MemoryArtifact {
+  kind: 'memory';
+  tool: string;
+  data: {
+    action: 'remembered' | 'forgot';
+    key: string;
+    content?: string;
+    category?: string;
+  };
+}
+
+export type WorkspaceModuleId = 'voice_notes';
+
+export interface WorkspaceArtifact {
+  kind: 'workspace';
+  tool: string;
+  data: { module: WorkspaceModuleId };
+}
+
+export type ChatArtifact =
+  | ComparisonArtifact
+  | SkillArtifact
+  | MemoryArtifact
+  | WorkspaceArtifact;
+
+export interface AgentMemoryItem {
+  id: string;
+  key: string;
+  content: string;
+  category: string;
+  source_turn: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TodoStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled';
+
+export interface ChatTodoItem {
+  id: string;
+  content: string;
+  status: TodoStatus;
+}
+
+export type SubagentStatus = 'started' | 'finished' | 'failed';
+
+export interface ChatSubagent {
+  id: string;
+  status: SubagentStatus;
+  goal: string;
+  summary: string | null;
+  steps: ChatToolStep[];
+}
+
+export interface ChatCompaction {
+  mode: 'truncate' | 'summarize';
+  beforeChars: number;
+  afterChars: number;
+  agentId: string;
+}
+
+export interface ChatTurn {
+  question: string;
+  steps: ChatToolStep[];
+  answer: string;
+  citations: ChatCitation[];
+  artifacts: ChatArtifact[];
+  todos: ChatTodoItem[];
+  subagents: ChatSubagent[];
+  compactions: ChatCompaction[];
+  model: string | null;
+  error: string | null;
+  verdict: ChatVerdict | null;
+  isRunning: boolean;
+}
+
+export interface ChatResearchProps {
+  onWorkspace?: (workspace: WorkspaceState) => void;
+  onTurnsChange?: (turns: ChatTurn[]) => void;
+  composerSlot?: HTMLElement | null;
+}
+
+export interface ChatThreadProps {
+  turns: ChatTurn[];
+}
+
+export type ChatEvent =
+  | {
+      type: 'tool_call';
+      name: string;
+      arguments: Record<string, unknown>;
+      agent_id?: string;
+    }
+  | {
+      type: 'tool_result';
+      name: string;
+      summary: string;
+      permission?: ChatPermission;
+      agent_id?: string;
+    }
+  | ({ type: 'artifact' } & ChatArtifact)
+  | { type: 'token'; text: string }
+  | { type: 'citations'; citations: ChatCitation[] }
+  | ({ type: 'verdict' } & ChatVerdict)
+  | { type: 'todo'; items: ChatTodoItem[] }
+  | {
+      type: 'subagent';
+      id: string;
+      status: SubagentStatus;
+      goal: string;
+      summary?: string;
+    }
+  | {
+      type: 'compact';
+      mode: 'truncate' | 'summarize';
+      before_chars: number;
+      after_chars: number;
+      agent_id?: string;
+    }
+  | { type: 'done'; model: string; prompt_version: string }
+  | { type: 'error'; message: string };
 
 export const DEFAULT_COMPARE_DIMENSIONS = [
   'problem',
@@ -294,6 +526,7 @@ export interface TextBoxProps {
   maxHeight?: string;
   ariaLabel?: string;
   id?: string;
+  onKeyDown?: React.KeyboardEventHandler<HTMLTextAreaElement>;
 }
 
 export interface BoxProps {
@@ -304,6 +537,7 @@ export interface BoxProps {
   isExpanded?: boolean;
   onToggleExpanded?: () => void;
   className?: string;
+  compact?: boolean;
 }
 
 export type AudioFileType =

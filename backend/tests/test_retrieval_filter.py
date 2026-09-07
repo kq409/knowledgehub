@@ -10,6 +10,7 @@ import db
 from models import (
     Note,
     NoteChunk,
+    NotePaper,
     NoteSourceType,
     Paper,
     PaperChunk,
@@ -106,7 +107,6 @@ async def test_search_for_paper_excludes_unlinked_notes(session):
     linked = Note(
         source_type=NoteSourceType.voice.value,
         title="Linked to A",
-        paper_id=paper_a.id,
         processing_status=ProcessingStatus.ready.value,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -114,7 +114,6 @@ async def test_search_for_paper_excludes_unlinked_notes(session):
     unlinked = Note(
         source_type=NoteSourceType.voice.value,
         title="Unlinked note",
-        paper_id=None,
         processing_status=ProcessingStatus.ready.value,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -122,7 +121,6 @@ async def test_search_for_paper_excludes_unlinked_notes(session):
     other = Note(
         source_type=NoteSourceType.handwritten.value,
         title="Linked to B",
-        paper_id=paper_b.id,
         processing_status=ProcessingStatus.ready.value,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -131,6 +129,8 @@ async def test_search_for_paper_excludes_unlinked_notes(session):
     await session.flush()
     session.add_all(
         [
+            NotePaper(note_id=linked.id, paper_id=paper_a.id),
+            NotePaper(note_id=other.id, paper_id=paper_b.id),
             NoteChunk(
                 note_id=linked.id,
                 chunk_index=0,
@@ -165,3 +165,174 @@ async def test_search_for_paper_excludes_unlinked_notes(session):
         for paper in (paper_a, paper_b):
             await session.delete(paper)
         await session.commit()
+
+
+async def _insert_note(
+    session,
+    title: str,
+    embedding: list[float],
+    *,
+    paper: Paper | None = None,
+) -> Note:
+    note = Note(
+        source_type=NoteSourceType.voice.value,
+        title=title,
+        processing_status=ProcessingStatus.ready.value,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    session.add(note)
+    await session.flush()
+    session.add(
+        NoteChunk(
+            note_id=note.id,
+            chunk_index=0,
+            text=f"{title} commentary",
+            embedding=embedding,
+        )
+    )
+    if paper is not None:
+        session.add(NotePaper(note_id=note.id, paper_id=paper.id))
+    await session.commit()
+    await session.refresh(note)
+    return note
+
+
+async def test_search_expands_note_hit_with_linked_paper_chunks(session):
+    if not await _table_exists(session, "notes"):
+        pytest.skip("PostgreSQL notes table is not available")
+
+    paper = await _insert_paper(session, "Linked methods paper", FAR)
+    note = await _insert_note(session, "Near note", NEAR, paper=paper)
+    try:
+        hits = await search(
+            session,
+            QUERY,
+            include_handwritten_notes=False,
+            top_k=4,
+        )
+        paper_hits = [hit for hit in hits if hit.source_type == "paper"]
+        ours = [hit for hit in hits if hit.source_id == note.id]
+        assert ours
+        assert ours[0].linked_titles == ("Linked methods paper",)
+        assert any(hit.source_id == paper.id and hit.via_link for hit in paper_hits)
+    finally:
+        await session.delete(note)
+        await session.delete(paper)
+        await session.commit()
+
+
+async def test_search_expands_paper_hit_with_linked_note_chunks(session):
+    if not await _table_exists(session, "notes"):
+        pytest.skip("PostgreSQL notes table is not available")
+
+    paper = await _insert_paper(session, "Near paper", NEAR)
+    note = await _insert_note(session, "Far linked note", FAR, paper=paper)
+    try:
+        hits = await search(
+            session,
+            QUERY,
+            include_handwritten_notes=False,
+            top_k=4,
+        )
+        note_hits = [hit for hit in hits if hit.source_type != "paper"]
+        assert any(hit.source_id == note.id and hit.via_link for hit in note_hits)
+    finally:
+        await session.delete(note)
+        await session.delete(paper)
+        await session.commit()
+
+
+async def test_unlinked_note_does_not_expand_to_other_papers(session):
+    if not await _table_exists(session, "notes"):
+        pytest.skip("PostgreSQL notes table is not available")
+
+    paper = await _insert_paper(session, "Unrelated paper", FAR)
+    note = await _insert_note(session, "Unlinked near note", NEAR)
+    try:
+        hits = await search(
+            session,
+            QUERY,
+            include_handwritten_notes=False,
+            top_k=4,
+        )
+        ours = [hit for hit in hits if hit.source_id == note.id]
+        assert ours
+        assert ours[0].linked_titles == ()
+        assert all(hit.source_id != paper.id for hit in hits)
+    finally:
+        await session.delete(note)
+        await session.delete(paper)
+        await session.commit()
+
+
+async def test_hybrid_search_finds_acronym_dense_would_miss(session):
+    """Lexical match should surface a far embedding when the query is literal."""
+    nonce = "ZXQELLA7"
+    ella = await _insert_paper_with_text(
+        session,
+        f"{nonce}: Efficient Lifelong Learning Algorithm",
+        FAR,
+        f"{nonce} transfers sparse models across tasks.",
+    )
+    near = await _insert_paper_with_text(
+        session,
+        "Unrelated neural nets",
+        NEAR,
+        "Convolutional networks classify images.",
+    )
+    try:
+        dense_only = await search(
+            session,
+            QUERY,
+            include_voice_notes=False,
+            include_handwritten_notes=False,
+            top_k=8,
+            expand_links=False,
+        )
+        dense_ids = {hit.source_id for hit in dense_only}
+        assert near.id in dense_ids
+
+        hybrid = await search(
+            session,
+            QUERY,
+            query_text=nonce,
+            include_voice_notes=False,
+            include_handwritten_notes=False,
+            top_k=8,
+            expand_links=False,
+        )
+        hybrid_ids = {hit.source_id for hit in hybrid}
+        assert ella.id in hybrid_ids
+    finally:
+        for paper in (ella, near):
+            await session.delete(paper)
+        await session.commit()
+
+
+async def _insert_paper_with_text(
+    session, title: str, embedding: list[float], text: str
+) -> Paper:
+    paper = Paper(
+        title=title,
+        original_filename=f"{title}.pdf",
+        original_file=f"/tmp/{uuid.uuid4()}.pdf",
+        processing_status=PaperStatus.ready.value,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    session.add(paper)
+    await session.flush()
+    session.add(
+        PaperChunk(
+            paper_id=paper.id,
+            chunk_index=0,
+            text=text,
+            page=1,
+            section="Abstract",
+            embedding=embedding,
+        )
+    )
+    await session.commit()
+    await session.refresh(paper)
+    return paper

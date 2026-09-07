@@ -41,15 +41,24 @@ class ExtractionService:
         self.prompt_version = PROMPT_VERSION
 
     def _complete(self, messages: list[dict[str, str]]) -> str:
-        response = self.llm_client.chat.completions.create(
-            model=self.llm_model,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=EXTRACT_MAX_TOKENS,
-            stream=False,
+        from services.llm_chat import effort_from_env, message_text, with_chat_extras
+
+        effort = effort_from_env(
+            "EXTRACT_REASONING_EFFORT", "LLM_REASONING_EFFORT", default="none"
         )
-        content = response.choices[0].message.content or ""
-        return content.strip()
+        response = self.llm_client.chat.completions.create(
+            **with_chat_extras(
+                {
+                    "model": self.llm_model,
+                    "messages": messages,
+                    "temperature": 0.2,
+                    "max_tokens": EXTRACT_MAX_TOKENS,
+                    "stream": False,
+                },
+                effort=effort,
+            )
+        )
+        return message_text(response.choices[0].message)
 
     def extract(self, cleaned_text: str, raw_text: str | None = None) -> ExtractedNote:
         if not cleaned_text.strip():

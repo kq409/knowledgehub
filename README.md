@@ -111,8 +111,40 @@ ResearchPilot talks to any OpenAI-compatible LLM provider:
 The devcontainer creates `backend/.env` with Ollama defaults. To switch providers, edit:
 
 - `LLM_BASE_URL` — API endpoint
-- `LLM_API_KEY` — API key
+- `LLM_API_KEY` — API key (never commit real keys)
 - `LLM_MODEL` — Model name
+- `LLM_REASONING_EFFORT` — global default `none` / `low` / `medium` / `high`
+- Optional per-path overrides: `ASK_REASONING_EFFORT`, `CHAT_REASONING_EFFORT`,
+  `COMPARE_REASONING_EFFORT`, `JUDGE_REASONING_EFFORT` (Judge defaults to `none`)
+- `ASK_MAX_TOKENS` / `CHAT_MAX_TOKENS` — generation ceilings (default **4096**)
+- `COMPARE_MAX_TOKENS` / `AGENT_COMPARE_MAX_TOKENS` — Compare ceilings (raise if
+  high reasoning effort truncates JSON)
+- `JUDGE_MODEL` — cheaper reviewer when the main model is a large reasoning model
+
+### DeepSeek (chat) + Ollama (embeddings)
+
+Keep chat and embeddings on separate hosts — DeepSeek does not serve
+`nomic-embed-text`. Example `backend/.env` block:
+
+```env
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=sk-your-key
+LLM_MODEL=deepseek-v4-flash
+LLM_REASONING_EFFORT=high
+ASK_REASONING_EFFORT=none
+CHAT_REASONING_EFFORT=low
+JUDGE_REASONING_EFFORT=none
+JUDGE_MODEL=deepseek-v4-flash
+ASK_MAX_TOKENS=4096
+CHAT_MAX_TOKENS=4096
+
+EMBEDDING_BASE_URL=http://ollama:11434/v1
+EMBEDDING_API_KEY=ollama
+EMBEDDING_MODEL=nomic-embed-text
+```
+
+If Ask/Chat return HTTP 404 mentioning an embedding model, the chat host is
+being used for embeddings — fix `EMBEDDING_*`, do not point them at DeepSeek.
 
 ---
 

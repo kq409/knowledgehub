@@ -23,6 +23,7 @@ from schemas import (
 )
 from services.embeddings import EmbeddingService
 from services.extraction import parse_json_object
+from services.llm_chat import max_tokens_from_env as max_tokens_from_env
 from services.retrieval import (
     LinkedNote,
     RetrievalHit,
@@ -32,11 +33,13 @@ from services.retrieval import (
 )
 
 MAP_PROMPT_FILE = Path(__file__).resolve().parent.parent / "compare_map_prompt.txt"
-REDUCE_PROMPT_FILE = Path(__file__).resolve().parent.parent / "compare_reduce_prompt.txt"
+REDUCE_PROMPT_FILE = (
+    Path(__file__).resolve().parent.parent / "compare_reduce_prompt.txt"
+)
 MAP_PROMPT = MAP_PROMPT_FILE.read_text().strip()
 REDUCE_PROMPT = REDUCE_PROMPT_FILE.read_text().strip()
 PROMPT_VERSION = "compare-papers-v1"
-COMPARE_MAX_TOKENS = 1500
+COMPARE_MAX_TOKENS = 8192
 EVIDENCE_CHARS = 800
 
 PAPER_LABEL = "Paper"
@@ -134,25 +137,39 @@ class CompareService:
         llm_client: OpenAI,
         llm_model: str,
         embeddings: EmbeddingService,
+        max_tokens: int = COMPARE_MAX_TOKENS,
     ):
         self.llm_client = llm_client
         self.llm_model = llm_model
         self.embeddings = embeddings
+        self.max_tokens = max_tokens
         self.prompt_version = PROMPT_VERSION
 
     def _complete(self, messages: list[dict[str, str]]) -> str:
-        response = self.llm_client.chat.completions.create(
-            model=self.llm_model,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=COMPARE_MAX_TOKENS,
-            stream=False,
+        from services.llm_chat import (
+            effort_from_env,
+            message_text,
+            with_chat_extras,
         )
-        return (response.choices[0].message.content or "").strip()
 
-    def _complete_json(
-        self, messages: list[dict[str, str]], *, what: str
-    ) -> dict:
+        effort = effort_from_env(
+            "COMPARE_REASONING_EFFORT", "LLM_REASONING_EFFORT", default="none"
+        )
+        response = self.llm_client.chat.completions.create(
+            **with_chat_extras(
+                {
+                    "model": self.llm_model,
+                    "messages": messages,
+                    "temperature": 0.2,
+                    "max_tokens": self.max_tokens,
+                    "stream": False,
+                },
+                effort=effort,
+            )
+        )
+        return message_text(response.choices[0].message)
+
+    def _complete_json(self, messages: list[dict[str, str]], *, what: str) -> dict:
         last_error: Exception | None = None
         working = list(messages)
         for attempt in range(2):
@@ -247,9 +264,7 @@ class CompareService:
                 continue
             papers.append(paper)
         if missing:
-            raise CompareValidationError(
-                "Paper not found: " + ", ".join(missing)
-            )
+            raise CompareValidationError("Paper not found: " + ", ".join(missing))
         if not_ready:
             raise CompareValidationError(
                 "Only ready papers can be compared: " + ", ".join(not_ready)
@@ -277,7 +292,9 @@ class CompareService:
         citations: list[CompareCitation] = []
         index = 1
         for paper in papers:
-            hits = await search_for_paper(session, query_embedding, paper.id)
+            hits = await search_for_paper(
+                session, query_embedding, paper.id, query_text=query
+            )
             mapped = await asyncio.to_thread(self._map_paper, paper, dimensions, hits)
             cells[paper.id] = mapped
             for hit in hits:
@@ -298,9 +315,7 @@ class CompareService:
                 )
                 index += 1
 
-        synthesis = await asyncio.to_thread(
-            self._reduce, papers, dimensions, cells
-        )
+        synthesis = await asyncio.to_thread(self._reduce, papers, dimensions, cells)
 
         paper_results = [
             ComparePaperResult(
@@ -345,9 +360,7 @@ def response_from_row(row: PaperComparison) -> CompareResponse:
     papers_raw = result.get("papers") or []
     papers = [ComparePaperResult.model_validate(item) for item in papers_raw]
     synthesis = CompareSynthesis.model_validate(result.get("synthesis") or {})
-    citations = [
-        CompareCitation.model_validate(item) for item in (row.citations or [])
-    ]
+    citations = [CompareCitation.model_validate(item) for item in (row.citations or [])]
     paper_ids = [_as_uuid(item) for item in row.paper_ids]
     return CompareResponse(
         id=row.id,

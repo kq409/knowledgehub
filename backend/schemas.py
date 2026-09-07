@@ -1,8 +1,11 @@
 import uuid
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+from services.note_links import MAX_PAPERS_PER_NOTE, dedupe_paper_ids
 
 
 class ReviewStatus(str, Enum):
@@ -44,12 +47,25 @@ class NoteStatus(str, Enum):
     failed = "failed"
 
 
+def _validate_note_paper_ids(value: list[uuid.UUID]) -> list[uuid.UUID]:
+    unique = dedupe_paper_ids(value)
+    if len(unique) > MAX_PAPERS_PER_NOTE:
+        raise ValueError(f"A note can link to at most {MAX_PAPERS_PER_NOTE} papers")
+    return unique
+
+
 class NoteCreate(ExtractedNote):
     raw_transcript: str
     cleaned_transcript: str
     review_status: ReviewStatus = ReviewStatus.generated
     model: str | None = None
     prompt_version: str | None = None
+    paper_ids: list[uuid.UUID] = Field(default_factory=list)
+
+    @field_validator("paper_ids")
+    @classmethod
+    def cap_create_paper_ids(cls, value: list[uuid.UUID]) -> list[uuid.UUID]:
+        return _validate_note_paper_ids(value)
 
 
 class NoteUpdate(BaseModel):
@@ -62,7 +78,35 @@ class NoteUpdate(BaseModel):
     tags: list[str] | None = None
     review_status: ReviewStatus | None = None
     extracted_text: str | None = None
-    paper_id: uuid.UUID | None = None
+    paper_ids: list[uuid.UUID] | None = None
+
+    @field_validator("paper_ids")
+    @classmethod
+    def cap_update_paper_ids(
+        cls, value: list[uuid.UUID] | None
+    ) -> list[uuid.UUID] | None:
+        if value is None:
+            return None
+        return _validate_note_paper_ids(value)
+
+
+class NoteLinkSource(str, Enum):
+    researcher = "researcher"
+    ai = "ai"
+
+
+class ConnectReasonMode(str, Enum):
+    snippet = "snippet"
+    llm = "llm"
+
+
+class NotePaperLink(BaseModel):
+    paper_id: uuid.UUID
+    source: NoteLinkSource = NoteLinkSource.researcher
+    similarity: float | None = None
+    snippet: str | None = None
+    reason: str | None = None
+    reason_mode: ConnectReasonMode | None = None
 
 
 class NoteResponse(ExtractedNote):
@@ -76,7 +120,9 @@ class NoteResponse(ExtractedNote):
     original_filename: str | None = None
     page_count: int | None = None
     extracted_text: str | None = None
-    paper_id: uuid.UUID | None = None
+    paper_ids: list[uuid.UUID] = Field(default_factory=list)
+    paper_links: list[NotePaperLink] = Field(default_factory=list)
+    related_generated_at: datetime | None = None
     processing_status: NoteStatus
     processing_error: str | None = None
     chunk_count: int = 0
@@ -84,6 +130,36 @@ class NoteResponse(ExtractedNote):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RelatedPaper(BaseModel):
+    paper_id: uuid.UUID
+    title: str
+    year: int | None = None
+    similarity: float
+    snippet: str
+    reason: str
+    reason_mode: ConnectReasonMode
+    linked: bool
+    source: NoteLinkSource | None = None
+    page: int | None = None
+    section: str | None = None
+
+
+class ConnectRequest(BaseModel):
+    reason_mode: ConnectReasonMode = ConnectReasonMode.llm
+    top_k: int | None = Field(default=None, ge=1, le=8)
+
+
+class ConnectResponse(BaseModel):
+    note_id: uuid.UUID
+    reason_mode: ConnectReasonMode
+    papers: list[RelatedPaper]
+    linked_paper_ids: list[uuid.UUID]
+    skipped_paper_ids: list[uuid.UUID] = Field(default_factory=list)
+    model: str | None = None
+    prompt_version: str
+    generated_at: datetime
 
 
 class NoteChunkResponse(BaseModel):
@@ -160,6 +236,12 @@ class PaperResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class LibraryUploadResponse(BaseModel):
+    kind: Literal["paper", "note"]
+    paper: PaperResponse | None = None
+    note: NoteResponse | None = None
+
+
 class PaperChunkResponse(BaseModel):
     id: uuid.UUID
     paper_id: uuid.UUID
@@ -176,19 +258,21 @@ class CitationSourceType(str, Enum):
     paper = "paper"
     voice = "voice"
     handwritten = "handwritten"
+    web = "web"
 
 
 class AskCitation(BaseModel):
     index: int
     source_type: CitationSourceType
-    source_id: uuid.UUID
-    chunk_id: uuid.UUID
+    source_id: uuid.UUID | None = None
+    chunk_id: uuid.UUID | None = None
     title: str
     page: int | None = None
     section: str | None = None
     year: int | None = None
     snippet: str
-    similarity: float
+    similarity: float = 0.0
+    url: str | None = None
 
 
 class QueryKind(str, Enum):
@@ -198,6 +282,9 @@ class QueryKind(str, Enum):
 
 class ExternalSearchStatus(str, Enum):
     unavailable = "unavailable"
+    ready = "ready"
+    ran = "ran"
+    failed = "failed"
 
 
 class LibraryCoverage(BaseModel):
@@ -212,6 +299,7 @@ class AskRequest(BaseModel):
     include_voice_notes: bool = True
     include_handwritten_notes: bool = True
     top_k: int | None = Field(default=None, ge=1, le=16)
+    external_search: bool = False
 
     @field_validator("question")
     @classmethod
@@ -233,6 +321,140 @@ class AskResponse(BaseModel):
     library_coverage: LibraryCoverage
     suggest_external_search: bool = False
     external_search_status: ExternalSearchStatus = ExternalSearchStatus.unavailable
+
+
+class ChatCitation(BaseModel):
+    """Evidence the agent actually read through a tool.
+
+    Mirrors AskCitation, but `similarity` is absent for chunks the agent read
+    in source order instead of retrieving by vector search.
+    """
+
+    index: int
+    source_type: CitationSourceType
+    source_id: uuid.UUID
+    chunk_id: uuid.UUID
+    title: str
+    page: int | None = None
+    section: str | None = None
+    year: int | None = None
+    snippet: str
+    similarity: float | None = None
+
+
+class ChatRole(str, Enum):
+    user = "user"
+    assistant = "assistant"
+
+
+class ChatMessage(BaseModel):
+    role: ChatRole
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
+    include_papers: bool = True
+    include_voice_notes: bool = True
+    include_handwritten_notes: bool = True
+    top_k: int | None = Field(default=None, ge=1, le=16)
+
+    @field_validator("messages")
+    @classmethod
+    def conversation_is_usable(cls, value: list[ChatMessage]) -> list[ChatMessage]:
+        if not value:
+            raise ValueError("Send at least one message")
+        if value[-1].role is not ChatRole.user:
+            raise ValueError("The last message must come from the user")
+        if not value[-1].content.strip():
+            raise ValueError("Question cannot be empty")
+        return value
+
+
+class ChatEventType(str, Enum):
+    tool_call = "tool_call"
+    tool_result = "tool_result"
+    artifact = "artifact"
+    token = "token"
+    citations = "citations"
+    verdict = "verdict"
+    todo = "todo"
+    subagent = "subagent"
+    compact = "compact"
+    done = "done"
+    error = "error"
+
+
+class TodoStatus(str, Enum):
+    pending = "pending"
+    in_progress = "in_progress"
+    completed = "completed"
+    cancelled = "cancelled"
+
+
+class ChatTodoItem(BaseModel):
+    id: str
+    content: str
+    status: TodoStatus
+
+
+class SubagentStatus(str, Enum):
+    started = "started"
+    finished = "finished"
+    failed = "failed"
+
+
+class CompactMode(str, Enum):
+    truncate = "truncate"
+    summarize = "summarize"
+
+
+class ArtifactKind(str, Enum):
+    """Structured tool output the UI renders instead of reading as prose."""
+
+    comparison = "comparison"
+    skill = "skill"
+    memory = "memory"
+
+
+class ChatArtifact(BaseModel):
+    kind: ArtifactKind
+    tool: str
+    data: dict
+
+
+class GateStatus(str, Enum):
+    """How well the evidence gate thinks the answer is backed up.
+
+    `unchecked` means the deterministic checks passed but the LLM reviewer was
+    expected and could not be reached, so nobody looked at whether the prose
+    actually follows from the snippets.
+    """
+
+    supported = "supported"
+    unsupported = "unsupported"
+    unchecked = "unchecked"
+    retrying = "retrying"
+
+
+class GateProblemKind(str, Enum):
+    fabricated_citation = "fabricated_citation"
+    no_evidence_gathered = "no_evidence_gathered"
+    uncited_answer = "uncited_answer"
+    unsupported_claim = "unsupported_claim"
+    judge_unavailable = "judge_unavailable"
+
+
+class ChatGateProblem(BaseModel):
+    kind: GateProblemKind
+    detail: str
+
+
+class ChatVerdict(BaseModel):
+    status: GateStatus
+    reason: str = ""
+    checked_by: str = "deterministic"
+    problems: list[ChatGateProblem] = Field(default_factory=list)
 
 
 DEFAULT_COMPARE_DIMENSIONS = (
@@ -351,3 +573,21 @@ class CompareSummary(BaseModel):
     paper_ids: list[uuid.UUID]
     paper_titles: list[str]
     created_at: datetime
+
+
+class MemoryCategory(str, Enum):
+    preference = "preference"
+    hypothesis = "hypothesis"
+    focus = "focus"
+    workflow = "workflow"
+    other = "other"
+
+
+class MemoryResponse(BaseModel):
+    id: uuid.UUID
+    key: str
+    content: str
+    category: str
+    source_turn: str | None = None
+    created_at: datetime
+    updated_at: datetime

@@ -1,0 +1,50 @@
+[
+  {
+    "id": "acronym-ella",
+    "query": "ZXQELLA7 lifelong learning",
+    "kind": "lexical",
+    "must_include_titles": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"]
+  },
+  {
+    "id": "acronym-ella-short",
+    "query": "ZXQELLA7",
+    "kind": "lexical",
+    "must_include_titles": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"]
+  },
+  {
+    "id": "semantic-transfer",
+    "query": "ZXQELLA7 transfers sparse models across tasks",
+    "kind": "semantic",
+    "must_include_titles": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"]
+  },
+  {
+    "id": "semantic-images",
+    "query": "ZXQCNN7 classify photographs",
+    "kind": "semantic",
+    "must_include_titles": ["ZXQCNN7 convolutional networks"]
+  },
+  {
+    "id": "sota-field-wide",
+    "query": "What is the SOTA robot learning algorithm so far in 2026?",
+    "kind": "field_wide",
+    "must_include_titles": []
+  },
+  {
+    "id": "sota-chinese",
+    "query": "2026年最先进的机器人学习算法是什么？",
+    "kind": "field_wide",
+    "must_include_titles": []
+  },
+  {
+    "id": "library-claim",
+    "query": "What does ZXQELLA7 claim about transfer?",
+    "kind": "library",
+    "must_include_titles": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"]
+  },
+  {
+    "id": "may-miss-unrelated",
+    "query": "quantum gravity in eleven dimensions",
+    "kind": "may_miss",
+    "must_include_titles": []
+  }
+]
