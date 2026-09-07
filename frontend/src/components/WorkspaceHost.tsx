@@ -1,4 +1,4 @@
-import { Columns2, MessageSquareText, Mic, X } from 'lucide-react';
+import { ClipboardList, Columns2, MessageSquareText, Mic, X } from 'lucide-react';
 import { useState } from 'react';
 import styles from './WorkspaceHost.module.css';
 import type { ChatTurn, CompareResponse, WorkspaceState } from '../types';
@@ -8,6 +8,7 @@ import {
   CompareTable,
 } from './CompareResult';
 import { ChatThread } from './ChatThread';
+import { EvalPanel } from './EvalPanel';
 import { VoiceNotes } from './VoiceNotes';
 
 type WorkspaceTab = 'conversation' | 'panel';
@@ -15,6 +16,9 @@ type WorkspaceTab = 'conversation' | 'panel';
 function workspaceTitle(workspace: WorkspaceState): string {
   if (workspace.module === 'compare') {
     return 'Compare';
+  }
+  if (workspace.module === 'eval') {
+    return 'Eval';
   }
   return 'Voice notes';
 }
@@ -82,7 +86,12 @@ export function WorkspaceHost({
   }
 
   const showingPanel = tab === 'panel' && workspace != null;
-  const PanelIcon = workspace?.module === 'compare' ? Columns2 : Mic;
+  const PanelIcon =
+    workspace?.module === 'compare'
+      ? Columns2
+      : workspace?.module === 'eval'
+        ? ClipboardList
+        : Mic;
 
   return (
     <section
@@ -143,6 +152,8 @@ export function WorkspaceHost({
         <div className={styles.body}>
           {workspace.module === 'compare' ? (
             <CompareWorkspace result={workspace.result} />
+          ) : workspace.module === 'eval' ? (
+            <EvalPanel />
           ) : (
             <VoiceNotes />
           )}

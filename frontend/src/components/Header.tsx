@@ -1,9 +1,9 @@
-import { Settings, X } from 'lucide-react';
+import { ClipboardList, Settings, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import styles from './Header.module.css';
 import { MemoryPanel } from './MemoryPanel';
 
-export function Header() {
+export function Header({ onOpenEval }: { onOpenEval?: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
 
@@ -30,6 +30,16 @@ export function Header() {
         </p>
       </div>
       <div className={styles.settingsWrap} ref={panelRef}>
+        {onOpenEval ? (
+          <button
+            type="button"
+            className={styles.settingsButton}
+            aria-label="Open evaluation runs"
+            onClick={onOpenEval}
+          >
+            <ClipboardList className={styles.settingsIcon} />
+          </button>
+        ) : null}
         <button
           type="button"
           className={`${styles.settingsButton} ${

@@ -30,7 +30,6 @@ from schemas import (
     GateProblemKind,
     GateStatus,
 )
-from services.extraction import parse_json_object
 
 PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "judge_prompt.txt"
 JUDGE_PROMPT = PROMPT_FILE.read_text().strip()
@@ -315,16 +314,53 @@ class EvidenceGate:
 
         for attempt in range(JUDGE_ATTEMPTS):
             try:
-                output = await asyncio.to_thread(self._complete, messages)
+                from services.llm_chat import complete_json_object, effort_from_env
+
+                effort = effort_from_env("JUDGE_REASONING_EFFORT", default="none")
+                payload = await asyncio.to_thread(
+                    complete_json_object,
+                    self.llm_client,
+                    messages=messages,
+                    model=self.judge_model or self.llm_model or "",
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "verdict": {
+                                "type": "string",
+                                "enum": ["supported", "unsupported"],
+                            },
+                            "reason": {"type": "string"},
+                            "unsupported_claims": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["verdict"],
+                    },
+                    temperature=JUDGE_TEMPERATURE,
+                    max_tokens=JUDGE_MAX_TOKENS,
+                    effort=effort,
+                )
+            except (json.JSONDecodeError, ValueError) as exc:
+                print(f"⚠️  Evidence reviewer attempt {attempt + 1} failed: {exc}")
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "That was not valid JSON matching the schema. "
+                            f"Error: {exc}. Return ONLY the JSON object."
+                        ),
+                    }
+                )
+                continue
             except Exception as exc:  # noqa: BLE001 - reviewer must fail open
                 print(f"⚠️  Evidence reviewer unreachable: {exc}")
                 return None
 
             try:
-                return _problems_from_payload(parse_json_object(output))
-            except (json.JSONDecodeError, ValueError) as exc:
+                return _problems_from_payload(payload)
+            except ValueError as exc:
                 print(f"⚠️  Evidence reviewer attempt {attempt + 1} failed: {exc}")
-                messages.append({"role": "assistant", "content": output})
                 messages.append(
                     {
                         "role": "user",

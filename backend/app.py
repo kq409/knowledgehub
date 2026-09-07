@@ -15,6 +15,7 @@ from db import close_db, init_db, run_migrations
 from routers.ask import router as ask_router
 from routers.chat import router as chat_router
 from routers.compare import router as compare_router
+from routers.eval import router as eval_router
 from routers.library import router as library_router
 from routers.memories import router as memories_router
 from routers.notes import resume_pending_notes
@@ -217,6 +218,7 @@ app.include_router(ask_router)
 app.include_router(chat_router)
 app.include_router(compare_router)
 app.include_router(memories_router)
+app.include_router(eval_router)
 
 
 @app.get("/api/status")

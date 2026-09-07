@@ -51,6 +51,12 @@ data/papers/*
 !data/papers/.gitkeep
 data/notes/*
 !data/notes/.gitkeep
+data/traces/*
+!data/traces/.gitkeep
+
+# Eval run transcripts
+backend/eval/runs/*
+!backend/eval/runs/.gitkeep
 
 # Environment
 .env

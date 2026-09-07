@@ -14,7 +14,7 @@ function App() {
 
   return (
     <div className={styles.app}>
-      <Header />
+      <Header onOpenEval={() => setWorkspace({ module: 'eval' })} />
       <div className={styles.shell}>
         <aside className={styles.sidebar}>
           <div className={styles.libraryPane}>

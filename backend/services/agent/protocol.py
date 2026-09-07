@@ -73,6 +73,8 @@ class ToolCall:
 class AgentResponse:
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 def tools_unsupported(error: Exception) -> bool:
@@ -265,9 +267,12 @@ class AgentProtocol:
         return self._from_text(completion)
 
     def _from_native(self, completion) -> AgentResponse:
+        from services.llm_chat import usage_tokens
+
         message = completion.choices[0].message
         text = (getattr(message, "content", None) or "").strip()
         raw_calls = getattr(message, "tool_calls", None) or []
+        prompt, completion_tokens = usage_tokens(completion)
 
         calls = [
             ToolCall(
@@ -279,21 +284,47 @@ class AgentProtocol:
             if getattr(call, "function", None) is not None
         ]
         if calls:
-            return AgentResponse(text=text, tool_calls=calls)
+            return AgentResponse(
+                text=text,
+                tool_calls=calls,
+                prompt_tokens=prompt,
+                completion_tokens=completion_tokens,
+            )
 
         # Some providers accept `tools` and then quietly ignore them, answering
         # with the JSON object in plain text instead.
         fallback = parse_text_tool_call(text, self.allowed_tools)
         if fallback is not None:
-            return AgentResponse(text="", tool_calls=[fallback])
-        return AgentResponse(text=text)
+            return AgentResponse(
+                text="",
+                tool_calls=[fallback],
+                prompt_tokens=prompt,
+                completion_tokens=completion_tokens,
+            )
+        return AgentResponse(
+            text=text,
+            prompt_tokens=prompt,
+            completion_tokens=completion_tokens,
+        )
 
     def _from_text(self, completion) -> AgentResponse:
+        from services.llm_chat import usage_tokens
+
         text = (completion.choices[0].message.content or "").strip()
+        prompt, completion_tokens = usage_tokens(completion)
         call = parse_text_tool_call(text, self.allowed_tools)
         if call is not None:
-            return AgentResponse(text="", tool_calls=[call])
-        return AgentResponse(text=text)
+            return AgentResponse(
+                text="",
+                tool_calls=[call],
+                prompt_tokens=prompt,
+                completion_tokens=completion_tokens,
+            )
+        return AgentResponse(
+            text=text,
+            prompt_tokens=prompt,
+            completion_tokens=completion_tokens,
+        )
 
     async def complete(self, messages: list[dict]) -> AgentResponse:
         return await asyncio.to_thread(self._complete_sync, list(messages))

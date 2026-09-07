@@ -237,7 +237,8 @@ export interface AskResponse {
 
 export type WorkspaceState =
   | { module: 'compare'; result: CompareResponse }
-  | { module: 'voice_notes' };
+  | { module: 'voice_notes' }
+  | { module: 'eval' };
 
 /**
  * Evidence the agent read through a tool. `similarity` is null for chunks it

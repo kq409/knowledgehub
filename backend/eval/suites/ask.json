@@ -1,0 +1,253 @@
+{
+  "suite": "ask",
+  "trials": 1,
+  "tasks": [
+    {
+      "id": "acronym-ella",
+      "kind": "regression",
+      "query": "ZXQELLA7 lifelong learning",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "acronym-ella-short",
+      "kind": "regression",
+      "query": "ZXQELLA7",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "acronym-bert",
+      "kind": "regression",
+      "query": "ZXQBERT7",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQBERT7 attention for language"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "acronym-vae",
+      "kind": "regression",
+      "query": "ZXQVAE7",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQVAE7 latent variable models"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "semantic-transfer",
+      "kind": "capability",
+      "query": "ZXQELLA7 transfers sparse models across tasks",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"],
+          "k": 8
+        },
+        { "type": "abstain", "expect": "none" }
+      ]
+    },
+    {
+      "id": "semantic-images",
+      "kind": "capability",
+      "query": "ZXQCNN7 classify photographs",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQCNN7 convolutional networks"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "semantic-bert-attention",
+      "kind": "capability",
+      "query": "ZXQBERT7 bidirectional attention",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQBERT7 attention for language"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "semantic-vae-latent",
+      "kind": "capability",
+      "query": "ZXQVAE7 compressed latent space",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQVAE7 latent variable models"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "library-claim",
+      "kind": "capability",
+      "query": "What does ZXQELLA7 claim about transfer?",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"],
+          "k": 8
+        },
+        { "type": "abstain", "expect": "none" },
+        { "type": "citations", "require_indices": true },
+        { "type": "faithfulness" }
+      ]
+    },
+    {
+      "id": "library-claim-cnn",
+      "kind": "capability",
+      "query": "What does ZXQCNN7 say about photographs?",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQCNN7 convolutional networks"],
+          "k": 8
+        },
+        { "type": "abstain", "expect": "none" }
+      ]
+    },
+    {
+      "id": "library-claim-note",
+      "kind": "capability",
+      "query": "What is my hypothesis about ZXQELLA7 transfer?",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": [
+            "Voice note on ZXQELLA7 transfer",
+            "ZXQELLA7: Efficient Lifelong Learning Algorithm"
+          ],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "handwritten-cnn",
+      "kind": "capability",
+      "query": "What did I write about ZXQCNN7 photographs?",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["Handwritten notes on ZXQCNN7"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "sota-field-wide",
+      "kind": "regression",
+      "query": "What is the SOTA robot learning algorithm so far in 2026?",
+      "graders": [
+        { "type": "abstain", "expect": "insufficient_evidence" },
+        { "type": "abstain", "expect": "suggest_external_search" }
+      ]
+    },
+    {
+      "id": "sota-chinese",
+      "kind": "regression",
+      "query": "2026年最先进的机器人学习算法是什么？",
+      "graders": [
+        { "type": "abstain", "expect": "insufficient_evidence" }
+      ]
+    },
+    {
+      "id": "sota-latest-progress",
+      "kind": "regression",
+      "query": "What is the latest progress in robot learning as of 2026?",
+      "graders": [
+        { "type": "abstain", "expect": "insufficient_evidence" }
+      ]
+    },
+    {
+      "id": "sota-state-of-the-art",
+      "kind": "regression",
+      "query": "What is the state of the art in lifelong learning so far in 2026?",
+      "graders": [
+        { "type": "abstain", "expect": "insufficient_evidence" }
+      ]
+    },
+    {
+      "id": "may-miss-unrelated",
+      "kind": "regression",
+      "query": "quantum gravity in eleven dimensions",
+      "graders": [
+        { "type": "abstain", "expect": "insufficient_evidence" }
+      ]
+    },
+    {
+      "id": "may-miss-cooking",
+      "kind": "regression",
+      "query": "how to caramelize onions for a steak sauce",
+      "graders": [
+        { "type": "abstain", "expect": "insufficient_evidence" }
+      ]
+    },
+    {
+      "id": "missing-paper",
+      "kind": "regression",
+      "query": "What does ZXQNONE7 claim about fusion?",
+      "graders": [
+        { "type": "abstain", "expect": "insufficient_evidence" }
+      ]
+    },
+    {
+      "id": "lexical-algorithm-token",
+      "kind": "regression",
+      "query": "ZXQELLA7 algorithm",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "library-bert-claim",
+      "kind": "capability",
+      "query": "What does ZXQBERT7 claim about self-attention?",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQBERT7 attention for language"],
+          "k": 8
+        },
+        { "type": "abstain", "expect": "none" }
+      ]
+    },
+    {
+      "id": "library-vae-claim",
+      "kind": "capability",
+      "query": "What does ZXQVAE7 claim about the encoder?",
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQVAE7 latent variable models"],
+          "k": 8
+        },
+        { "type": "abstain", "expect": "none" }
+      ]
+    }
+  ]
+}

@@ -11,8 +11,10 @@ Voice notes go through local Whisper transcription and LLM cleanup, then become 
 - Voice notes: browser recording or audio upload, Whisper speech-to-text, optional LLM cleanup
 - Structured research notes with review status (generated → draft → reviewed → accepted)
 - Paper library with metadata, tags, and GROBID parsing
-- Ask: retrieve from notes and papers
+- Ask: retrieve from notes and papers, with citations
 - Compare: side-by-side comparison across selected papers
+- Eval: retrieval and agent suites with a transcript viewer
+- MCP: read-only library tools for Cursor
 - OpenAI-compatible LLM API (Ollama, LM Studio, OpenAI, or any compatible endpoint)
 
 ---
@@ -181,6 +183,38 @@ npm run build
 Set `DATABASE_URL` (see `backend/.env.example`). Without it, API tests that need Postgres skip and the suite can look green while skipping most coverage.
 
 This CI does not deploy the app.
+
+### Evaluation
+
+Ask (retrieval + abstain + citations) and Chat (tool/outcome) suites live in `backend/eval/suites/`. They seed a tagged synthetic ZXQ* library, run the production `AskService` / `ResearchAgent`, and write transcripts to `backend/eval/runs/`.
+
+```bash
+cd backend
+uv run python -m eval.harness --suite ask
+uv run python -m eval.harness --suite chat --llm
+```
+
+Without `--llm`, Ask uses keyword embeddings and a stub completer so retrieval graders run offline. Open the Eval panel in the app header to browse the latest run and transcripts. `POST /api/eval/run?suite=ask` triggers the same Ask suite.
+
+### MCP (read-only library tools)
+
+The Chat subagent tools (`search_library`, `list_papers`, `list_notes`, `read_paper`, `read_note`, `list_skills`, `load_skill`, `memory_search`) are also an MCP server. Postgres and the embedding host must already be running. Cursor `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "researchpilot": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "mcp_server"],
+      "cwd": "/absolute/path/to/researchpilot/backend"
+    }
+  }
+}
+```
+
+Write tools (link/unlink, memory_write, compare) are not exposed.
+
+Hybrid lexical search uses stored `tsvector` columns. Optional FlashRank rerank: set `RERANK_ENABLED=true` (downloads a small ONNX model on first use). Ask/Chat traces always append JSONL under `data/traces/`; set `OPIK_API_KEY` to also send them to Comet Opik.
 
 ---
 

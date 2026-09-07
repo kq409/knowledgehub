@@ -203,12 +203,17 @@ def _apply_rerank(
     return reranked[:keep]
 
 
-async def list_ready_papers(session: AsyncSession) -> list[LibraryPaper]:
-    result = await session.execute(
-        select(Paper.title, Paper.year).where(
-            Paper.processing_status == PaperStatus.ready.value
-        )
+async def list_ready_papers(
+    session: AsyncSession, paper_ids: list[uuid.UUID] | None = None
+) -> list[LibraryPaper]:
+    if paper_ids is not None and not paper_ids:
+        return []
+    query = select(Paper.title, Paper.year).where(
+        Paper.processing_status == PaperStatus.ready.value
     )
+    if paper_ids is not None:
+        query = query.where(Paper.id.in_(paper_ids))
+    result = await session.execute(query)
     return [LibraryPaper(title=title, year=year) for title, year in result.all()]
 
 
@@ -524,12 +529,10 @@ def _lexical_tokens(query_text: str) -> list[str]:
     return tokens
 
 
-def _lexical_match_clauses(query_text: str, *columns):
+def _lexical_match_clauses(query_text: str, tsv_column, *text_columns):
     tsquery = func.plainto_tsquery("simple", query_text)
-    clauses = []
-    for column in columns:
-        tsv = func.to_tsvector("simple", column)
-        clauses.append(tsv.op("@@")(tsquery))
+    clauses = [tsv_column.op("@@")(tsquery)]
+    for column in text_columns:
         clauses.append(column.ilike(_like_pattern(query_text), escape="\\"))
         for token in _lexical_tokens(query_text):
             clauses.append(column.ilike(_like_pattern(token), escape="\\"))
@@ -593,11 +596,11 @@ async def _lexical_search_papers(
     if paper_ids is not None and not paper_ids:
         return []
     tsquery = func.plainto_tsquery("simple", query_text)
-    chunk_tsv = func.to_tsvector("simple", PaperChunk.text)
+    chunk_tsv = PaperChunk.tsv
     rank = func.ts_rank_cd(chunk_tsv, tsquery) + _title_boost(Paper.title, query_text)
     conditions = [
         Paper.processing_status == PaperStatus.ready.value,
-        _lexical_match_clauses(query_text, PaperChunk.text, Paper.title),
+        _lexical_match_clauses(query_text, chunk_tsv, PaperChunk.text, Paper.title),
     ]
     if paper_ids is not None:
         conditions.append(Paper.id.in_(paper_ids))
@@ -646,12 +649,12 @@ async def _lexical_search_notes(
     if not source_types:
         return []
     tsquery = func.plainto_tsquery("simple", query_text)
-    chunk_tsv = func.to_tsvector("simple", NoteChunk.text)
+    chunk_tsv = NoteChunk.tsv
     rank = func.ts_rank_cd(chunk_tsv, tsquery) + _title_boost(Note.title, query_text)
     conditions = [
         Note.processing_status == ProcessingStatus.ready.value,
         Note.source_type.in_(source_types),
-        _lexical_match_clauses(query_text, NoteChunk.text, Note.title),
+        _lexical_match_clauses(query_text, chunk_tsv, NoteChunk.text, Note.title),
     ]
     if paper_ids is not None:
         conditions.append(

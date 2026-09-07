@@ -300,6 +300,7 @@ class AskRequest(BaseModel):
     include_handwritten_notes: bool = True
     top_k: int | None = Field(default=None, ge=1, le=16)
     external_search: bool = False
+    paper_ids: list[uuid.UUID] | None = None
 
     @field_validator("question")
     @classmethod
@@ -321,6 +322,10 @@ class AskResponse(BaseModel):
     library_coverage: LibraryCoverage
     suggest_external_search: bool = False
     external_search_status: ExternalSearchStatus = ExternalSearchStatus.unavailable
+    request_id: str | None = None
+    latency_ms: float | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 class ChatCitation(BaseModel):

@@ -22,7 +22,6 @@ from schemas import (
     normalize_paper_ids,
 )
 from services.embeddings import EmbeddingService
-from services.extraction import parse_json_object
 from services.llm_chat import max_tokens_from_env as max_tokens_from_env
 from services.retrieval import (
     LinkedNote,
@@ -170,15 +169,27 @@ class CompareService:
         return message_text(response.choices[0].message)
 
     def _complete_json(self, messages: list[dict[str, str]], *, what: str) -> dict:
+        from services.llm_chat import complete_json_object, effort_from_env
+
         last_error: Exception | None = None
         working = list(messages)
+        effort = effort_from_env(
+            "COMPARE_REASONING_EFFORT", "LLM_REASONING_EFFORT", default="none"
+        )
+        schema = {"type": "object"}
         for attempt in range(2):
-            output = self._complete(working)
             try:
-                return parse_json_object(output)
+                return complete_json_object(
+                    self.llm_client,
+                    messages=working,
+                    model=self.llm_model,
+                    schema=schema,
+                    temperature=0.2,
+                    max_tokens=self.max_tokens,
+                    effort=effort,
+                )
             except (json.JSONDecodeError, ValueError) as exc:
                 last_error = exc
-                working.append({"role": "assistant", "content": output})
                 working.append(
                     {
                         "role": "user",

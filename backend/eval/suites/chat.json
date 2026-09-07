@@ -1,0 +1,173 @@
+{
+  "suite": "chat",
+  "trials": 3,
+  "tasks": [
+    {
+      "id": "grounded-ella-transfer",
+      "kind": "capability",
+      "query": "What does ZXQELLA7 claim about transferring models across tasks?",
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_paper", "read_note"]
+        },
+        {
+          "type": "outcome",
+          "contains_any": ["transfer", "sparse", "lifelong"]
+        },
+        { "type": "citations", "require_indices": true },
+        {
+          "type": "transcript",
+          "max_tool_calls": 8
+        },
+        { "type": "faithfulness" }
+      ]
+    },
+    {
+      "id": "grounded-cnn-photos",
+      "kind": "capability",
+      "query": "What does ZXQCNN7 say about classifying photographs?",
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_paper"]
+        },
+        {
+          "type": "outcome",
+          "contains_any": ["photograph", "convolution"]
+        },
+        { "type": "citations", "require_indices": true }
+      ]
+    },
+    {
+      "id": "grounded-bert-attention",
+      "kind": "capability",
+      "query": "According to my library, how does ZXQBERT7 mix tokens?",
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_paper"]
+        },
+        {
+          "type": "outcome",
+          "contains_any": ["attention", "bidirectional"]
+        }
+      ]
+    },
+    {
+      "id": "note-hypothesis",
+      "kind": "capability",
+      "query": "What hypothesis did I record about ZXQELLA7 transfer?",
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_note", "list_notes"]
+        },
+        {
+          "type": "outcome",
+          "contains_any": ["robot", "transfer", "hypothesis"]
+        }
+      ]
+    },
+    {
+      "id": "list-then-locate",
+      "kind": "regression",
+      "query": "List the papers in my library, then tell me which one is about lifelong learning.",
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["list_papers", "search_library"]
+        },
+        {
+          "type": "outcome",
+          "contains_any": ["ZXQELLA7", "lifelong"]
+        }
+      ]
+    },
+    {
+      "id": "abstain-sota",
+      "kind": "regression",
+      "query": "What is the SOTA robot learning algorithm so far in 2026?",
+      "graders": [
+        {
+          "type": "outcome",
+          "contains_any": [
+            "does not",
+            "cannot",
+            "not enough",
+            "library does not",
+            "insufficient",
+            "cannot support",
+            "不足以",
+            "无法"
+          ]
+        },
+        { "type": "transcript", "max_tool_calls": 8 }
+      ]
+    },
+    {
+      "id": "abstain-sota-chinese",
+      "kind": "regression",
+      "query": "2026年最先进的机器人学习算法是什么？",
+      "graders": [
+        {
+          "type": "outcome",
+          "contains_any": [
+            "不足以",
+            "无法",
+            "不能",
+            "does not",
+            "cannot",
+            "library"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "abstain-quantum",
+      "kind": "regression",
+      "query": "What does my library say about quantum gravity in eleven dimensions?",
+      "graders": [
+        {
+          "type": "outcome",
+          "contains_any": [
+            "does not",
+            "cannot",
+            "no supporting",
+            "not cover",
+            "没有",
+            "无法"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "read-vae",
+      "kind": "capability",
+      "query": "Open the ZXQVAE7 paper and summarize what the encoder does.",
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["read_paper", "search_library"]
+        },
+        {
+          "type": "outcome",
+          "contains_any": ["encoder", "latent", "Gaussian"]
+        }
+      ]
+    },
+    {
+      "id": "no-fabricated-cites",
+      "kind": "regression",
+      "query": "Cite the library for ZXQELLA7's transfer claim.",
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_paper"]
+        },
+        { "type": "transcript", "max_tool_calls": 8 },
+        { "type": "citations" }
+      ]
+    }
+  ]
+}

@@ -13,6 +13,8 @@ P3 adds an in-turn todo list, one nested research pass per turn, and automatic
 context compaction before each model call.
 """
 
+import time
+import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +49,7 @@ from services.agent.tools import (
     ToolError,
     ToolResult,
 )
+from services.ask_trace import log_chat_trace
 from services.compare import CompareService
 from services.connect import ConnectService
 from services.embeddings import EmbeddingService
@@ -303,6 +306,12 @@ class ResearchAgent:
         ctx = self._context(session, payload, registry, todo_store)
         question = payload.messages[-1].content
         base_prompt = AGENT_PROMPT
+        request_id = str(uuid.uuid4())
+        started = time.perf_counter()
+        tools_called: list[str] = []
+        prompt_tokens = 0
+        completion_tokens = 0
+        saw_usage = False
 
         messages: list[dict] = [
             {"role": "system", "content": protocol.system_prompt(base_prompt)}
@@ -323,6 +332,12 @@ class ResearchAgent:
 
             response = await self._complete(protocol, messages, base_prompt)
             messages.append(protocol.assistant_message(response))
+            if response.prompt_tokens is not None:
+                prompt_tokens += response.prompt_tokens
+                saw_usage = True
+            if response.completion_tokens is not None:
+                completion_tokens += response.completion_tokens
+                saw_usage = True
 
             if response.tool_calls:
                 for index, call in enumerate(response.tool_calls):
@@ -365,6 +380,7 @@ class ResearchAgent:
                     permission = self.policy.check(call.name)
                     if permission.allowed:
                         tool_calls_made += 1
+                        tools_called.append(call.name)
                     messages.append(protocol.tool_result_message(call, result.content))
                 continue
 
@@ -415,7 +431,29 @@ class ResearchAgent:
                 type=ChatEventType.verdict,
                 data=verdict.as_schema().model_dump(mode="json"),
             )
+        latency_ms = (time.perf_counter() - started) * 1000
+        gate_status = None
+        if verdict is not None:
+            gate_status = verdict.as_schema().status.value
+        log_chat_trace(
+            question=question,
+            tools_called=tools_called,
+            citations=[item.model_dump(mode="json") for item in citations],
+            answer=answer or "",
+            latency_ms=latency_ms,
+            gate_status=gate_status,
+            request_id=request_id,
+            prompt_tokens=prompt_tokens if saw_usage else None,
+            completion_tokens=completion_tokens if saw_usage else None,
+        )
         yield AgentEvent(
             type=ChatEventType.done,
-            data={"model": self.llm_model, "prompt_version": self.prompt_version},
+            data={
+                "model": self.llm_model,
+                "prompt_version": self.prompt_version,
+                "request_id": request_id,
+                "latency_ms": round(latency_ms, 1),
+                "prompt_tokens": prompt_tokens if saw_usage else None,
+                "completion_tokens": completion_tokens if saw_usage else None,
+            },
         )

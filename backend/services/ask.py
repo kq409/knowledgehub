@@ -25,8 +25,6 @@ from services.embeddings import EmbeddingService
 from services.llm_chat import (
     effort_from_env,
     max_tokens_from_env,
-    message_text,
-    with_chat_extras,
 )
 from services.retrieval import (
     DEFAULT_MIN_SIMILARITY,
@@ -126,6 +124,8 @@ class AskService:
         self.min_similarity = min_similarity
         self.prompt_version = PROMPT_VERSION
         self.web_search = web_search if web_search is not None else WebSearchService()
+        self.last_prompt_tokens: int | None = None
+        self.last_completion_tokens: int | None = None
 
     def library_search_status(self) -> ExternalSearchStatus:
         if self.web_search.available():
@@ -133,23 +133,26 @@ class AskService:
         return ExternalSearchStatus.unavailable
 
     def _complete(self, messages: list[dict[str, str]]) -> str:
+        from services.llm_chat import complete_chat
+
         effort = effort_from_env(
             "ASK_REASONING_EFFORT", "LLM_REASONING_EFFORT", default="none"
         )
         max_tokens = max_tokens_from_env("ASK_MAX_TOKENS", ASK_MAX_TOKENS_DEFAULT)
-        response = self.llm_client.chat.completions.create(
-            **with_chat_extras(
-                {
-                    "model": self.llm_model,
-                    "messages": messages,
-                    "temperature": 0.2,
-                    "max_tokens": max_tokens,
-                    "stream": False,
-                },
-                effort=effort,
-            )
+        result = complete_chat(
+            self.llm_client,
+            {
+                "model": self.llm_model,
+                "messages": messages,
+                "temperature": 0.2,
+                "max_tokens": max_tokens,
+                "stream": False,
+            },
+            effort=effort,
         )
-        return message_text(response.choices[0].message)
+        self.last_prompt_tokens = result.prompt_tokens
+        self.last_completion_tokens = result.completion_tokens
+        return result.text
 
     def _generate(
         self,
@@ -224,11 +227,12 @@ class AskService:
 
     async def ask(self, session: AsyncSession, payload: AskRequest) -> AskResponse:
         started = time.perf_counter()
+        request_id = str(uuid.uuid4())
         top_k = clamp_top_k(payload.top_k)
         query_embedding = await asyncio.to_thread(
             self.embeddings.embed_query, payload.question
         )
-        papers = await list_ready_papers(session)
+        papers = await list_ready_papers(session, paper_ids=payload.paper_ids)
         hits = await search(
             session,
             query_embedding,
@@ -237,6 +241,7 @@ class AskService:
             include_voice_notes=payload.include_voice_notes,
             include_handwritten_notes=payload.include_handwritten_notes,
             top_k=top_k,
+            paper_ids=payload.paper_ids,
         )
         decision = decide_ask(
             payload.question,
@@ -276,6 +281,7 @@ class AskService:
 
         citations = self._library_citations(decision.citation_hits)
         citations.extend(self._web_citations(web_hits, start_index=len(citations) + 1))
+        latency_ms = (time.perf_counter() - started) * 1000
         result = AskResponse(
             answer=answer,
             insufficient_evidence=decision.insufficient_evidence and not web_hits,
@@ -287,6 +293,10 @@ class AskService:
             library_coverage=decision.coverage,
             suggest_external_search=decision.suggest_external_search,
             external_search_status=status,
+            request_id=request_id,
+            latency_ms=round(latency_ms, 1),
+            prompt_tokens=self.last_prompt_tokens,
+            completion_tokens=self.last_completion_tokens,
         )
         log_ask_trace(
             question=payload.question,
@@ -314,6 +324,9 @@ class AskService:
                 for item in citations
             ],
             answer=answer,
-            latency_ms=(time.perf_counter() - started) * 1000,
+            latency_ms=latency_ms,
+            request_id=request_id,
+            prompt_tokens=self.last_prompt_tokens,
+            completion_tokens=self.last_completion_tokens,
         )
         return result

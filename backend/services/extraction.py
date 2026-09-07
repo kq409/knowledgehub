@@ -77,14 +77,27 @@ class ExtractionService:
         ]
 
         last_error: Exception | None = None
+        from services.llm_chat import complete_json_object, effort_from_env
+
+        effort = effort_from_env(
+            "EXTRACT_REASONING_EFFORT", "LLM_REASONING_EFFORT", default="none"
+        )
+        schema = ExtractedNote.model_json_schema()
         for attempt in range(2):
-            output = self._complete(messages)
             try:
-                payload = parse_json_object(output)
+                payload = complete_json_object(
+                    self.llm_client,
+                    messages=messages,
+                    model=self.llm_model,
+                    schema=schema,
+                    temperature=0.2,
+                    max_tokens=EXTRACT_MAX_TOKENS,
+                    effort=effort,
+                )
                 return ExtractedNote.model_validate(payload)
             except (json.JSONDecodeError, ValueError, ValidationError) as exc:
                 last_error = exc
-                messages.append({"role": "assistant", "content": output})
+                messages.append({"role": "assistant", "content": json.dumps({})})
                 messages.append(
                     {
                         "role": "user",

@@ -1,0 +1,126 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  height: 100%;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.lead {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: var(--font-size-sm);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.button {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-xs);
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.button:disabled {
+  opacity: 0.5;
+}
+
+.error {
+  color: #f2b8b8;
+  font-size: var(--font-size-sm);
+}
+
+.muted {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: var(--font-size-sm);
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) 1fr;
+  gap: var(--space-4);
+  min-height: 0;
+  flex: 1;
+}
+
+.runList,
+.trialList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+}
+
+.runButton,
+.trialButton {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.runButton:hover,
+.trialButton:hover,
+.runActive {
+  background: rgba(91, 159, 245, 0.18);
+}
+
+.runId {
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono, monospace);
+}
+
+.runMeta {
+  font-size: var(--font-size-xs);
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.trialButton {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.pass {
+  color: #9be7b0;
+  font-size: var(--font-size-xs);
+}
+
+.fail {
+  color: #f2b8b8;
+  font-size: var(--font-size-xs);
+}
+
+.detail {
+  min-width: 0;
+  overflow: auto;
+}
+
+.transcript {
+  margin-top: var(--space-3);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: var(--font-size-sm);
+}
+
+.transcript h3 {
+  margin: 0 0 var(--space-2);
+}
