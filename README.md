@@ -1,5 +1,7 @@
 # ResearchPilot
 
+[![CI](https://github.com/kq409/researchpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/kq409/researchpilot/actions/workflows/ci.yml)
+
 Personal research assistant for capturing ideas, organizing papers, and asking questions against your own library.
 
 Voice notes go through local Whisper transcription and LLM cleanup, then become structured research notes. Papers live in a searchable library. Ask and Compare run retrieval over what you have stored.
@@ -145,6 +147,40 @@ EMBEDDING_MODEL=nomic-embed-text
 
 If Ask/Chat return HTTP 404 mentioning an embedding model, the chat host is
 being used for embeddings — fix `EMBEDDING_*`, do not point them at DeepSeek.
+
+---
+
+## Tests and CI
+
+Push and pull requests to `main` run [GitHub Actions](.github/workflows/ci.yml). Two jobs run in parallel:
+
+- **Backend:** pgvector Postgres, Alembic migrations, Ruff, Black, pytest
+- **Frontend:** Node 24, `npm ci`, type-check, ESLint, production build
+
+LLM, GROBID, and Whisper are mocked in tests. You do not need Ollama for CI.
+
+**Local equivalents** (Postgres with pgvector must be running; the devcontainer already provides it):
+
+```bash
+# backend
+cd backend
+uv sync --extra dev
+uv run alembic upgrade head
+uv run ruff check .
+uv run black --check .
+uv run pytest --tb=short
+
+# frontend
+cd frontend
+npm ci
+npm run type-check
+npm run lint
+npm run build
+```
+
+Set `DATABASE_URL` (see `backend/.env.example`). Without it, API tests that need Postgres skip and the suite can look green while skipping most coverage.
+
+This CI does not deploy the app.
 
 ---
 
