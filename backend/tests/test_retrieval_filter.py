@@ -28,6 +28,20 @@ FAR = [0.0, 1.0] + [0.0] * 766
 QUERY = list(NEAR)
 
 
+def _axis(index: int) -> list[float]:
+    vector = [0.0] * 768
+    vector[index] = 1.0
+    return vector
+
+
+# Dedicated axes so leftover unit(0) rows and a populated library cannot
+# crowd these expand tests, and so an empty CI database still fills top_k.
+LINK_NEAR = _axis(10)
+LINK_FAR = _axis(11)
+EXPAND_TOP_K = 4
+EXPAND_FILLERS = 3
+
+
 async def _table_exists(session, name: str) -> bool:
     try:
         await session.execute(text(f"SELECT 1 FROM {name} LIMIT 1"))
@@ -76,6 +90,20 @@ async def _insert_paper(session, title: str, embedding: list[float]) -> Paper:
     await session.commit()
     await session.refresh(paper)
     return paper
+
+
+async def _insert_filler_papers(
+    session, embedding: list[float], count: int = EXPAND_FILLERS
+) -> list[Paper]:
+    """NEAR fillers so a FAR neighbour is not already in top_k on an empty DB."""
+    papers: list[Paper] = []
+    for _ in range(count):
+        papers.append(
+            await _insert_paper(
+                session, f"Link-expand filler {uuid.uuid4()}", embedding
+            )
+        )
+    return papers
 
 
 async def test_paper_ids_filter_excludes_other_papers(session):
@@ -202,23 +230,26 @@ async def test_search_expands_note_hit_with_linked_paper_chunks(session):
     if not await _table_exists(session, "notes"):
         pytest.skip("PostgreSQL notes table is not available")
 
-    paper = await _insert_paper(session, "Linked methods paper", FAR)
-    note = await _insert_note(session, "Near note", NEAR, paper=paper)
+    paper = await _insert_paper(session, "Linked methods paper", LINK_FAR)
+    note = await _insert_note(session, "Near note", LINK_NEAR, paper=paper)
+    fillers = await _insert_filler_papers(session, LINK_NEAR)
     try:
-        hits = await search(
-            session,
-            QUERY,
-            include_handwritten_notes=False,
-            top_k=4,
-        )
-        paper_hits = [hit for hit in hits if hit.source_type == "paper"]
+        search_kw = {
+            "include_handwritten_notes": False,
+            "top_k": EXPAND_TOP_K,
+        }
+        base = await search(session, LINK_NEAR, expand_links=False, **search_kw)
+        hits = await search(session, LINK_NEAR, **search_kw)
         ours = [hit for hit in hits if hit.source_id == note.id]
         assert ours
         assert ours[0].linked_titles == ("Linked methods paper",)
-        assert any(hit.source_id == paper.id and hit.via_link for hit in paper_hits)
+        assert paper.id not in {hit.source_id for hit in base}
+        assert any(hit.source_id == paper.id and hit.via_link for hit in hits)
     finally:
         await session.delete(note)
         await session.delete(paper)
+        for filler in fillers:
+            await session.delete(filler)
         await session.commit()
 
 
@@ -226,20 +257,23 @@ async def test_search_expands_paper_hit_with_linked_note_chunks(session):
     if not await _table_exists(session, "notes"):
         pytest.skip("PostgreSQL notes table is not available")
 
-    paper = await _insert_paper(session, "Near paper", NEAR)
-    note = await _insert_note(session, "Far linked note", FAR, paper=paper)
+    paper = await _insert_paper(session, "Near paper", LINK_NEAR)
+    note = await _insert_note(session, "Far linked note", LINK_FAR, paper=paper)
+    fillers = await _insert_filler_papers(session, LINK_NEAR)
     try:
-        hits = await search(
-            session,
-            QUERY,
-            include_handwritten_notes=False,
-            top_k=4,
-        )
-        note_hits = [hit for hit in hits if hit.source_type != "paper"]
-        assert any(hit.source_id == note.id and hit.via_link for hit in note_hits)
+        search_kw = {
+            "include_handwritten_notes": False,
+            "top_k": EXPAND_TOP_K,
+        }
+        base = await search(session, LINK_NEAR, expand_links=False, **search_kw)
+        hits = await search(session, LINK_NEAR, **search_kw)
+        assert note.id not in {hit.source_id for hit in base}
+        assert any(hit.source_id == note.id and hit.via_link for hit in hits)
     finally:
         await session.delete(note)
         await session.delete(paper)
+        for filler in fillers:
+            await session.delete(filler)
         await session.commit()
 
 
@@ -247,22 +281,26 @@ async def test_unlinked_note_does_not_expand_to_other_papers(session):
     if not await _table_exists(session, "notes"):
         pytest.skip("PostgreSQL notes table is not available")
 
-    paper = await _insert_paper(session, "Unrelated paper", FAR)
-    note = await _insert_note(session, "Unlinked near note", NEAR)
+    paper = await _insert_paper(session, "Unrelated paper", LINK_FAR)
+    note = await _insert_note(session, "Unlinked near note", LINK_NEAR)
+    fillers = await _insert_filler_papers(session, LINK_NEAR)
     try:
         hits = await search(
             session,
-            QUERY,
+            LINK_NEAR,
             include_handwritten_notes=False,
-            top_k=4,
+            top_k=EXPAND_TOP_K,
         )
         ours = [hit for hit in hits if hit.source_id == note.id]
         assert ours
         assert ours[0].linked_titles == ()
         assert all(hit.source_id != paper.id for hit in hits)
+        assert all(not hit.via_link for hit in hits)
     finally:
         await session.delete(note)
         await session.delete(paper)
+        for filler in fillers:
+            await session.delete(filler)
         await session.commit()
 
 
