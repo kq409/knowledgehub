@@ -15,6 +15,7 @@ body,
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
 }
 
 body {
@@ -23,7 +24,7 @@ body {
   font-size: var(--font-size-base);
   line-height: var(--line-height-normal);
   color: var(--color-text-primary);
-  background: linear-gradient(135deg, #0a192f 0%, #112240 50%, #1a2332 100%);
+  background: linear-gradient(160deg, #eeffe0 0%, #e8fbd4 48%, #f4ffe8 100%);
   min-height: 100vh;
 }
 

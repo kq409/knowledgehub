@@ -25,20 +25,20 @@
 }
 
 .toggleText {
-  color: rgba(255, 255, 255, 0.95);
+  color: var(--color-text-primary);
   font-size: var(--font-size-base);
 }
 
 .description {
   font-size: var(--font-size-sm);
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--color-text-secondary);
   margin-left: 41px;
   margin-top: 0;
   margin-bottom: 0;
 }
 
 .promptSection {
-  border-top: 1px solid rgba(91, 159, 245, 0.15);
+  border-top: 1px solid var(--color-border);
 }
 
 .promptHeader {
@@ -63,13 +63,13 @@
 .promptLabel {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
-  color: rgba(255, 255, 255, 0.95);
+  color: var(--color-text-primary);
 }
 
 .chevron {
   width: 16px;
   height: 16px;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--color-text-secondary);
   transition: transform var(--transition-base);
 }
 
@@ -86,7 +86,7 @@
 .memorySection {
   margin-top: var(--space-4);
   padding-top: var(--space-4);
-  border-top: 1px solid rgba(91, 159, 245, 0.15);
+  border-top: 1px solid var(--color-border);
 }
 
 .memoryHeader {
@@ -101,9 +101,9 @@
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-md);
   font-size: var(--font-size-xs);
-  color: rgba(255, 255, 255, 0.8);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--color-text-secondary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
 }
 
 .refreshButton:disabled {
@@ -112,19 +112,19 @@
 
 .memoryHint {
   margin: 0 0 var(--space-3);
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
 }
 
 .memoryError {
   margin: 0 0 var(--space-2);
-  color: #fecaca;
+  color: var(--color-accent-red-fg);
   font-size: var(--font-size-sm);
 }
 
 .memoryEmpty {
   margin: 0;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
 }
 
@@ -139,9 +139,9 @@
 
 .memoryItem {
   padding: var(--space-3);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-surface-muted);
 }
 
 .memoryMeta {
@@ -155,20 +155,20 @@
 .memoryKey {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--color-text-primary);
 }
 
 .memoryCategory {
   padding: 2px 8px;
   border-radius: var(--radius-full);
   font-size: var(--font-size-xs);
-  background: rgba(91, 159, 245, 0.18);
-  color: #bfdbfe;
+  background: var(--color-accent-blue-bg);
+  color: var(--color-accent-blue-fg);
 }
 
 .memoryContent {
   margin: 0 0 var(--space-2);
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   white-space: pre-wrap;
 }
@@ -180,7 +180,7 @@
   padding: 0;
   background: none;
   border: none;
-  color: #fecaca;
+  color: var(--color-accent-red-fg);
   font-size: var(--font-size-xs);
   cursor: pointer;
 }

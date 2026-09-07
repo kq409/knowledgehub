@@ -16,7 +16,7 @@
 
 .lead {
   margin: 0;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
 }
 
@@ -29,9 +29,9 @@
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-md);
   font-size: var(--font-size-xs);
-  color: rgba(255, 255, 255, 0.85);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
 }
 
 .button:disabled {
@@ -39,12 +39,12 @@
 }
 
 .error {
-  color: #f2b8b8;
+  color: var(--color-error-fg);
   font-size: var(--font-size-sm);
 }
 
 .muted {
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
 }
 
@@ -74,13 +74,13 @@
   text-align: left;
   padding: var(--space-2);
   border-radius: var(--radius-md);
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--color-text-secondary);
 }
 
 .runButton:hover,
 .trialButton:hover,
 .runActive {
-  background: rgba(91, 159, 245, 0.18);
+  background: var(--color-primary-light);
 }
 
 .runId {
@@ -90,7 +90,7 @@
 
 .runMeta {
   font-size: var(--font-size-xs);
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--color-text-tertiary);
 }
 
 .trialButton {
@@ -101,12 +101,12 @@
 }
 
 .pass {
-  color: #9be7b0;
+  color: var(--color-accent-green-fg);
   font-size: var(--font-size-xs);
 }
 
 .fail {
-  color: #f2b8b8;
+  color: var(--color-accent-red-fg);
   font-size: var(--font-size-xs);
 }
 
@@ -117,7 +117,7 @@
 
 .transcript {
   margin-top: var(--space-3);
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--color-text-primary);
   font-size: var(--font-size-sm);
 }
 

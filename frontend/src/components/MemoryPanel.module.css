@@ -14,16 +14,16 @@
 .title {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
-  color: rgba(255, 255, 255, 0.95);
+  color: var(--color-text-primary);
 }
 
 .refreshButton {
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-md);
   font-size: var(--font-size-xs);
-  color: rgba(255, 255, 255, 0.8);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--color-text-secondary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
 }
 
 .refreshButton:disabled {
@@ -32,19 +32,19 @@
 
 .hint {
   margin: 0;
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
 }
 
 .error {
   margin: 0;
-  color: #fecaca;
+  color: var(--color-accent-red-fg);
   font-size: var(--font-size-sm);
 }
 
 .empty {
   margin: 0;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
 }
 
@@ -61,9 +61,9 @@
 
 .item {
   padding: var(--space-3);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-surface-muted);
 }
 
 .meta {
@@ -77,20 +77,20 @@
 .key {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--color-text-primary);
 }
 
 .category {
   padding: 2px 8px;
   border-radius: var(--radius-full);
   font-size: var(--font-size-xs);
-  background: rgba(91, 159, 245, 0.18);
-  color: #bfdbfe;
+  background: var(--color-accent-blue-bg);
+  color: var(--color-accent-blue-fg);
 }
 
 .content {
   margin: 0 0 var(--space-2);
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   white-space: pre-wrap;
 }
@@ -102,7 +102,7 @@
   padding: 0;
   background: none;
   border: none;
-  color: #fecaca;
+  color: var(--color-accent-red-fg);
   font-size: var(--font-size-xs);
   cursor: pointer;
 }

@@ -14,17 +14,17 @@
 .title {
   font-size: var(--font-size-2xl);
   font-weight: var(--font-weight-bold);
-  color: rgba(255, 255, 255, 0.95);
+  color: var(--color-text-primary);
   margin-bottom: var(--space-1);
   letter-spacing: -0.02em;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  text-shadow: none;
 }
 
 .subtitle {
   font-size: var(--font-size-sm);
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--color-text-secondary);
   font-weight: var(--font-weight-medium);
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  text-shadow: none;
 }
 
 .settingsWrap {
@@ -42,16 +42,16 @@
   width: 40px;
   height: 40px;
   border-radius: var(--radius-md);
-  color: rgba(255, 255, 255, 0.8);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--color-text-secondary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
 }
 
 .settingsButton:hover,
 .settingsOpen {
-  color: white;
-  background: rgba(91, 159, 245, 0.25);
-  border-color: rgba(91, 159, 245, 0.45);
+  color: var(--color-primary);
+  background: var(--color-primary-light);
+  border-color: var(--color-border-accent);
 }
 
 .settingsIcon {
@@ -67,9 +67,9 @@
   width: min(420px, calc(100vw - 32px));
   padding: var(--space-4);
   border-radius: var(--radius-lg);
-  background: rgba(17, 34, 64, 0.96);
-  border: 1px solid rgba(91, 159, 245, 0.35);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  background: var(--color-overlay);
+  border: 1px solid var(--color-border-accent);
+  box-shadow: 0 12px 32px var(--glass-shadow-lg);
 }
 
 @media (max-width: 640px) {

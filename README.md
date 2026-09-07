@@ -1,5 +1,9 @@
 # ResearchPilot
 
+![Status](https://img.shields.io/badge/Status-Active-brightgreen)
+![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![LLM](https://img.shields.io/badge/LLM-OpenAI_Compatible-7C3AED)
 [![CI](https://github.com/kq409/researchpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/kq409/researchpilot/actions/workflows/ci.yml)
 
 Personal research assistant for capturing ideas, organizing papers, and asking questions against your own library.

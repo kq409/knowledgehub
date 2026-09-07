@@ -5,7 +5,7 @@
   justify-content: center;
   gap: var(--space-3);
   min-height: 140px;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--color-text-primary);
   font-size: var(--font-size-sm);
 }
 
@@ -28,28 +28,28 @@
 }
 
 .status.generated {
-  background: rgba(91, 159, 245, 0.2);
-  color: #dbeafe;
+  background: var(--color-accent-blue-bg);
+  color: var(--color-accent-blue-fg);
 }
 
 .status.draft {
-  background: rgba(245, 158, 11, 0.2);
-  color: #fde68a;
+  background: var(--color-accent-amber-bg);
+  color: var(--color-accent-amber-fg);
 }
 
 .status.reviewed {
-  background: rgba(139, 92, 246, 0.2);
-  color: #ddd6fe;
+  background: var(--color-accent-purple-bg);
+  color: var(--color-accent-purple-fg);
 }
 
 .status.accepted {
-  background: rgba(52, 211, 153, 0.2);
-  color: #bbf7d0;
+  background: var(--color-accent-green-bg);
+  color: var(--color-accent-green-fg);
 }
 
 .savedLabel {
   font-size: var(--font-size-xs);
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--color-text-secondary);
 }
 
 .fieldLabel {
@@ -57,14 +57,14 @@
   align-items: baseline;
   gap: var(--space-2);
   margin-bottom: var(--space-2);
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--color-text-primary);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
 }
 
 .hint {
   font-weight: var(--font-weight-normal);
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
 }
 
@@ -83,7 +83,7 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--color-text-primary);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-normal);
 }
@@ -114,9 +114,9 @@
 }
 
 .primaryButton {
-  color: white;
+  color: var(--color-text-on-accent);
   background: var(--color-primary);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--color-border);
 }
 
 .primaryButton:hover:not(:disabled) {
@@ -130,15 +130,15 @@
 
 .secondaryButton,
 .statusButton {
-  color: #1e3a5f;
-  background: white;
-  border: 1px solid rgba(30, 58, 95, 0.2);
+  color: var(--color-text-primary);
+  background: var(--color-overlay);
+  border: 1px solid var(--color-border);
 }
 
 .secondaryButton:hover,
 .statusButton:hover:not(:disabled) {
   background: var(--color-primary);
-  color: white;
+  color: var(--color-text-on-accent);
 }
 
 .statusButton:disabled {
@@ -153,7 +153,7 @@
 
 .aiBadge {
   margin-left: var(--space-2);
-  color: #dbeafe;
+  color: var(--color-accent-blue-fg);
   font-size: 10px;
   font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;

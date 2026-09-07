@@ -1,32 +1,54 @@
 :root {
-  --color-primary: #5b9ff5;
-  --color-primary-hover: #4a8ae0;
-  --color-primary-light: #e8f2ff;
+  --color-primary: #3d9a4a;
+  --color-primary-hover: #2f7d3b;
+  --color-primary-light: #d9f5d4;
 
-  --color-secondary: #8b5cf6;
-  --color-secondary-hover: #7c3aed;
+  --color-secondary: #6d8f3e;
+  --color-secondary-hover: #56732f;
 
-  --color-success: #34d399;
-  --color-success-light: #d1fae5;
+  --color-success: #16a34a;
+  --color-success-light: #dcfce7;
 
   --color-error: #ef4444;
   --color-error-light: #fee2e2;
+  --color-error-fg: #991b1b;
 
-  --color-warning: #f59e0b;
+  --color-warning: #d97706;
+  --color-warning-light: #fef3c7;
+  --color-warning-fg: #92400e;
 
-  --color-text-primary: #1f2937;
-  --color-text-secondary: #6b7280;
-  --color-text-tertiary: #9ca3af;
+  --color-text-primary: #1a2e16;
+  --color-text-secondary: #3d5c38;
+  --color-text-tertiary: #5f7a58;
+  --color-text-on-accent: #ffffff;
 
-  --color-background: #f8fafc;
-  --color-surface: rgba(255, 255, 255, 0.7);
-  --color-surface-hover: rgba(255, 255, 255, 0.85);
-  --color-border: rgba(203, 213, 225, 0.5);
+  --color-background: #eeffe0;
+  --color-background-alt: #e4f8d2;
+  --color-surface: rgba(255, 255, 255, 0.78);
+  --color-surface-hover: rgba(255, 255, 255, 0.94);
+  --color-surface-muted: rgba(255, 255, 255, 0.5);
+  --color-border: rgba(46, 125, 50, 0.18);
+  --color-border-strong: rgba(46, 125, 50, 0.3);
+  --color-border-accent: rgba(61, 154, 74, 0.4);
 
-  --glass-bg: rgba(255, 255, 255, 0.7);
-  --glass-border: rgba(255, 255, 255, 0.3);
-  --glass-shadow: rgba(0, 0, 0, 0.05);
-  --glass-shadow-lg: rgba(0, 0, 0, 0.1);
+  --color-overlay: #ffffff;
+  --color-overlay-border: rgba(46, 125, 50, 0.22);
+
+  --color-accent-blue-bg: rgba(59, 130, 246, 0.16);
+  --color-accent-blue-fg: #1d4ed8;
+  --color-accent-green-bg: rgba(22, 163, 74, 0.16);
+  --color-accent-green-fg: #047857;
+  --color-accent-purple-bg: rgba(139, 92, 246, 0.14);
+  --color-accent-purple-fg: #6d28d9;
+  --color-accent-amber-bg: rgba(217, 119, 6, 0.16);
+  --color-accent-amber-fg: #b45309;
+  --color-accent-red-bg: rgba(239, 68, 68, 0.14);
+  --color-accent-red-fg: #dc2626;
+
+  --glass-bg: rgba(255, 255, 255, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.55);
+  --glass-shadow: rgba(46, 125, 50, 0.08);
+  --glass-shadow-lg: rgba(46, 125, 50, 0.14);
 
   /* 8px base */
   --space-1: 4px;
@@ -71,18 +93,18 @@
   --radius-2xl: 24px;
   --radius-full: 9999px;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 4px rgba(0, 0, 0, 0.02);
+  --shadow-sm: 0 1px 2px rgba(46, 125, 50, 0.06), 0 1px 4px rgba(46, 125, 50, 0.04);
 
-  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.06), 0 4px 8px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 4px rgba(46, 125, 50, 0.08), 0 4px 8px rgba(46, 125, 50, 0.05);
 
-  --shadow-lg: 0 4px 6px rgba(0, 0, 0, 0.07), 0 8px 16px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 4px 6px rgba(46, 125, 50, 0.08), 0 8px 16px rgba(46, 125, 50, 0.06);
 
-  --shadow-xl: 0 8px 12px rgba(0, 0, 0, 0.08), 0 16px 32px rgba(0, 0, 0, 0.06);
+  --shadow-xl: 0 8px 12px rgba(46, 125, 50, 0.09), 0 16px 32px rgba(46, 125, 50, 0.07);
 
   /* Glass Shadow - softer for glass effect */
   --shadow-glass:
-    0 2px 8px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.03),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+    0 2px 8px rgba(46, 125, 50, 0.06), 0 4px 16px rgba(46, 125, 50, 0.04),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.45);
 
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);

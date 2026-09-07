@@ -1,6 +1,6 @@
 .empty {
   margin: 0;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
 }
 
@@ -17,14 +17,14 @@
   display: flex;
   align-items: stretch;
   gap: var(--space-2);
-  border: 1px solid rgba(91, 159, 245, 0.25);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-surface);
 }
 
 .item.selected {
-  border-color: rgba(91, 159, 245, 0.7);
-  background: rgba(91, 159, 245, 0.12);
+  border-color: var(--color-primary);
+  background: var(--color-primary-light);
 }
 
 .selectButton {
@@ -39,7 +39,7 @@
 }
 
 .itemTitle {
-  color: rgba(255, 255, 255, 0.95);
+  color: var(--color-text-primary);
   font-weight: var(--font-weight-medium);
 }
 
@@ -47,7 +47,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
 }
 
@@ -60,13 +60,13 @@
   align-items: center;
   justify-content: center;
   width: 40px;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--color-text-secondary);
   border-radius: var(--radius-md);
 }
 
 .deleteButton:hover {
   color: var(--color-error);
-  background: rgba(239, 68, 68, 0.12);
+  background: var(--color-accent-red-bg);
 }
 
 .icon {

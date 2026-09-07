@@ -13,12 +13,12 @@
 .divider::after {
   content: '';
   flex: 1;
-  border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+  border-bottom: 2px solid var(--color-border-strong);
 }
 
 .divider span {
   padding: 0 var(--space-4);
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--color-text-secondary);
   font-weight: var(--font-weight-semibold);
   font-size: var(--font-size-sm);
 }
@@ -26,39 +26,39 @@
 .button {
   margin-top: var(--space-4);
   padding: var(--space-3) var(--space-6);
-  background: linear-gradient(135deg, var(--color-primary) 0%, #4a8dd8 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
   border: none;
   border-radius: var(--radius-lg);
-  color: white;
+  color: var(--color-text-on-accent);
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-semibold);
   cursor: pointer;
   transition: all var(--transition-base);
   box-shadow:
-    0 4px 6px rgba(91, 159, 245, 0.3),
-    0 2px 4px rgba(0, 0, 0, 0.2);
+    0 4px 6px var(--glass-shadow-lg),
+    0 2px 4px var(--glass-shadow);
   align-self: flex-start;
 }
 
 .button:hover:not(.disabled) {
-  background: linear-gradient(135deg, #60a5fa 0%, #5b9ff5 100%);
+  background: linear-gradient(135deg, #4caf57 0%, var(--color-primary) 100%);
   transform: translateY(-1px);
   box-shadow:
-    0 6px 12px rgba(91, 159, 245, 0.4),
-    0 4px 8px rgba(0, 0, 0, 0.3);
+    0 6px 12px var(--glass-shadow-lg),
+    0 4px 8px var(--glass-shadow);
 }
 
 .button:active:not(.disabled) {
   transform: translateY(0);
   box-shadow:
-    0 2px 4px rgba(91, 159, 245, 0.3),
-    0 1px 2px rgba(0, 0, 0, 0.2);
+    0 2px 4px var(--glass-shadow-lg),
+    0 1px 2px var(--glass-shadow);
 }
 
 .button.disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  background: rgba(91, 159, 245, 0.3);
+  background: var(--color-primary-light);
   box-shadow: none;
 }
 
