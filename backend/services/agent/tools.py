@@ -880,14 +880,15 @@ async def load_skill_tool(ctx: ToolContext, **kwargs: object) -> ToolResult:
 
 
 async def memory_search(ctx: ToolContext, **kwargs: object) -> ToolResult:
-    from services.agent.memory import MemoryError, memory_as_dict, search_memories
+    from services.agent.memory import MemoryError, catalog_line, search_memories
 
     query = kwargs.get("query")
     category = kwargs.get("category")
+    query_text = str(query).strip() if query is not None else ""
     try:
         rows = await search_memories(
             ctx.session,
-            query=str(query).strip() if query is not None else None,
+            query=query_text or None,
             category=str(category).strip() if category is not None else None,
         )
     except MemoryError as exc:
@@ -898,10 +899,15 @@ async def memory_search(ctx: ToolContext, **kwargs: object) -> ToolResult:
             content="No memories matched. The researcher has not stored one yet, or the query missed.",
             summary="Searched memories — no matches",
         )
+    if not query_text:
+        lines = [catalog_line(row) for row in rows]
+        return ToolResult(
+            content=f"{len(rows)} memor(ies) (catalog):\n" + "\n".join(lines),
+            summary=f"Listed memory catalog — {len(rows)} hit(s)",
+        )
     blocks = []
     for row in rows:
-        data = memory_as_dict(row)
-        blocks.append(f"- key={data['key']} [{data['category']}]\n  {data['content']}")
+        blocks.append(f"- key={row.key} [{row.category}]\n  {row.content}")
     return ToolResult(
         content=f"{len(rows)} memor(ies):\n" + "\n".join(blocks),
         summary=f"Searched memories — {len(rows)} hit(s)",
@@ -1395,8 +1401,9 @@ TOOL_SCHEMAS: list[dict] = [
             "name": "memory_search",
             "description": (
                 "Search cross-session memories (preferences, hypotheses, "
-                "focus areas). Call this when past preferences might matter. "
-                "Empty query returns the most recent memories."
+                "focus areas). Relevant memories are already in the system "
+                "prompt; call this for a miss or an explicit lookup. Empty "
+                "query returns a short catalog, not full records."
             ),
             "parameters": {
                 "type": "object",

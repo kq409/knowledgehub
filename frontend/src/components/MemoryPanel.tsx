@@ -62,8 +62,8 @@ export function MemoryPanel() {
         </button>
       </div>
       <p className={styles.hint}>
-        Preferences the chat agent stored across conversations. Delete any that
-        are wrong; the agent writes new ones with memory_write.
+        Chat auto-recalls relevant preferences across conversations. Delete
+        any that are wrong; the agent also writes with memory_write.
       </p>
       {memoriesError && (
         <p className={styles.error} role="alert">

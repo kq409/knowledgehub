@@ -22,13 +22,19 @@ from pathlib import Path
 from openai import OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from schemas import ChatCitation, ChatEventType, ChatRequest, GateStatus
+from schemas import ArtifactKind, ChatCitation, ChatEventType, ChatRequest, GateStatus
 from services.agent.compact import (
     COMPACT_CHAR_THRESHOLD,
     compact_messages,
     repair_tool_pairing,
 )
 from services.agent.gate import EvidenceGate, GateVerdict
+from services.agent.memory import (
+    RECALL_LOAD_LIMIT,
+    extract_and_store,
+    format_recalled_memories,
+    search_memories,
+)
 from services.agent.permissions import (
     DEFAULT_POLICY,
     PermissionPolicy,
@@ -57,7 +63,7 @@ from services.extraction import ExtractionService
 
 PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "chat_agent_prompt.txt"
 AGENT_PROMPT = PROMPT_FILE.read_text().strip()
-PROMPT_VERSION = "chat-agent-v6"
+PROMPT_VERSION = "chat-agent-v7"
 
 MAX_ITERATIONS = 8
 MAX_TOOL_CALLS_PER_TURN = 3
@@ -305,7 +311,14 @@ class ResearchAgent:
         todo_store = TodoStore()
         ctx = self._context(session, payload, registry, todo_store)
         question = payload.messages[-1].content
+        try:
+            recalled_rows = await search_memories(session, limit=RECALL_LOAD_LIMIT)
+            recalled = format_recalled_memories(recalled_rows, question)
+        except Exception:
+            recalled = ""
         base_prompt = AGENT_PROMPT
+        if recalled:
+            base_prompt = f"{AGENT_PROMPT}\n\n{recalled}"
         request_id = str(uuid.uuid4())
         started = time.perf_counter()
         tools_called: list[str] = []
@@ -431,6 +444,32 @@ class ResearchAgent:
                 type=ChatEventType.verdict,
                 data=verdict.as_schema().model_dump(mode="json"),
             )
+        if answer:
+            try:
+                extracted = await extract_and_store(
+                    session,
+                    llm_client=self.llm_client,
+                    llm_model=self.llm_model,
+                    user_text=question,
+                    answer=answer,
+                    source_turn="chat-extract",
+                )
+            except Exception:
+                extracted = []
+            for row in extracted:
+                yield AgentEvent(
+                    type=ChatEventType.artifact,
+                    data={
+                        "kind": ArtifactKind.memory.value,
+                        "tool": "memory_write",
+                        "data": {
+                            "action": "remembered",
+                            "key": row.key,
+                            "content": row.content,
+                            "category": row.category,
+                        },
+                    },
+                )
         latency_ms = (time.perf_counter() - started) * 1000
         gate_status = None
         if verdict is not None:
