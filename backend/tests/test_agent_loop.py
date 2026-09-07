@@ -30,6 +30,7 @@ from services.agent.loop import (
     MAX_ITERATIONS,
     MAX_TOOL_CALLS_PER_TURN,
     MAX_TOOL_RESULT_CHARS,
+    PROMPT_VERSION,
     AgentEvent,
     ResearchAgent,
     run_tool,
@@ -73,6 +74,7 @@ def text_protocol_agent(
     client: MagicMock,
     policy: PermissionPolicy | None = None,
     compare: MagicMock | None = None,
+    web_search: object | None = None,
 ) -> ResearchAgent:
     """Pin the agent to the JSON text channel, as gemma3 in the devcontainer."""
     capabilities = ToolCapabilityCache()
@@ -86,6 +88,7 @@ def text_protocol_agent(
         capabilities=capabilities,
         policy=policy,
         compare=compare,
+        web_search=web_search,
     )
 
 
@@ -272,10 +275,10 @@ async def test_tool_results_carry_citation_numbers_back_to_the_model(
 async def test_field_wide_question_reaches_the_model_with_real_coverage(
     library: Library,
 ):
-    """The SOTA gate is the model's judgment now, not a regex in front of it.
+    """Chat still runs for SOTA questions; it is not blocked by Ask's abstain.
 
-    `/api/ask` refuses to call the LLM for this question. Here the model runs,
-    sees that the library holds one 2006 paper, and decides for itself.
+    The model may call web_search. This test scripts list_papers then a
+    coverage-limited answer, which remains valid.
     """
     client = scripted_llm(
         '{"tool": "list_papers", "input": {}}',
@@ -294,6 +297,44 @@ async def test_field_wide_question_reaches_the_model_with_real_coverage(
     assert "2006" in inventory["content"]
     assert str(library.paper.id) in inventory["content"]
     assert events_of(events, ChatEventType.token)[0]["text"].startswith("Your library")
+
+
+async def test_field_wide_question_uses_web_search(library: Library):
+    from services.web_search import ExternalHit
+
+    class _ReadyWeb:
+        def available(self) -> bool:
+            return True
+
+        def search(self, query: str) -> list[ExternalHit]:
+            return [
+                ExternalHit(
+                    url="https://arxiv.org/abs/2401.00001",
+                    title="Survey of robot learning 2026",
+                    snippet="Recent work surveys SOTA methods.",
+                )
+            ]
+
+    client = scripted_llm(
+        '{"tool": "web_search", "input": {"query": "SOTA robot learning 2026"}}',
+        "The library has one 2006 paper. Web sources survey recent methods [1].",
+    )
+    agent = text_protocol_agent(client, web_search=_ReadyWeb())
+    events = [event async for event in agent.run(library.session, ask(SOTA_QUESTION))]
+
+    system = client.chat.completions.create.call_args_list[0].kwargs["messages"][0][
+        "content"
+    ]
+    assert "field-wide" in system.lower() or "SOTA" in system
+    assert [data["name"] for data in events_of(events, ChatEventType.tool_call)] == [
+        "web_search"
+    ]
+    citations = events_of(events, ChatEventType.citations)[0]["citations"]
+    assert any(item.get("source_type") == "web" for item in citations)
+    assert any(
+        item.get("url") == "https://arxiv.org/abs/2401.00001" for item in citations
+    )
+    assert events[-1].data["prompt_version"] == PROMPT_VERSION
 
 
 async def test_iteration_cap_forces_a_final_answer(library: Library):

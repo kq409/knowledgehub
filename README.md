@@ -8,14 +8,14 @@
 
 Personal research assistant for capturing ideas, organizing papers, and asking questions against your own library.
 
-Voice notes go through local Whisper transcription and LLM cleanup, then become structured research notes. Papers live in a searchable library. Ask and Compare run retrieval over what you have stored.
+Voice notes go through local Whisper transcription and LLM cleanup, then become structured research notes. Papers live in a searchable library. Chat retrieves over what you have stored, and can search the web for field-wide or latest-progress questions when configured.
 
 **Features:**
 
 - Voice notes: browser recording or audio upload, Whisper speech-to-text, optional LLM cleanup
 - Structured research notes with review status (generated → draft → reviewed → accepted)
 - Paper library with metadata, tags, and GROBID parsing
-- Ask: retrieve from notes and papers, with citations
+- Chat: retrieve from notes and papers, with citations; optional web search for SOTA / ArXiv / outside the library
 - Compare: side-by-side comparison across selected papers
 - Eval: retrieval and agent suites with a transcript viewer
 - MCP: read-only library tools for Cursor
@@ -153,6 +153,18 @@ EMBEDDING_MODEL=nomic-embed-text
 
 If Ask/Chat return HTTP 404 mentioning an embedding model, the chat host is
 being used for embeddings — fix `EMBEDDING_*`, do not point them at DeepSeek.
+
+Chat `web_search` (field-wide / SOTA / ArXiv questions) uses the DeepSeek
+Responses API, independent of `LLM_BASE_URL`:
+
+```env
+WEB_SEARCH_BASE_URL=https://api.deepseek.com
+WEB_SEARCH_API_KEY=sk-your-key
+WEB_SEARCH_MODEL=deepseek-v4-flash
+```
+
+Dummy values (`ollama`, `changeme`, empty) count as unset. Without a real key,
+Chat says web search is not configured and stays in the library.
 
 ---
 

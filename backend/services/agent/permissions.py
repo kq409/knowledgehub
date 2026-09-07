@@ -75,6 +75,9 @@ class PermissionPolicy:
 
 SHIPPED_RULES = [
     PermissionRule(tool="search_library", decision=Decision.allow),
+    # Public web via DeepSeek Responses API. Not a library tool; needs a real
+    # WEB_SEARCH_API_KEY. Subagents and MCP do not get this.
+    PermissionRule(tool="web_search", decision=Decision.allow),
     PermissionRule(tool="list_papers", decision=Decision.allow),
     PermissionRule(tool="list_notes", decision=Decision.allow),
     PermissionRule(tool="read_paper", decision=Decision.allow),

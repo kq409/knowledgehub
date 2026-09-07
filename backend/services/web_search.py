@@ -1,8 +1,9 @@
-"""DeepSeek Responses API web search for Ask's corrective fallback."""
+"""DeepSeek Responses API web search for Ask and Chat."""
 
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -16,6 +17,10 @@ class ExternalHit:
     url: str
     title: str
     snippet: str
+
+
+def web_citation_id(url: str) -> uuid.UUID:
+    return uuid.uuid5(uuid.NAMESPACE_URL, url)
 
 
 class WebSearcher(Protocol):

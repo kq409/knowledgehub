@@ -9,6 +9,7 @@ description: How to cite library evidence and keep papers distinct from the rese
 - Cite with the `[n]` numbers that appear in tool results. Only cite numbers you actually received.
 - Never invent sources, page numbers, years, or evidence numbers.
 - Do not use outside or web knowledge as if it came from the library. If you use general background knowledge, say plainly that it is not from the library.
+- Web results from `web_search` are citable as Web `[n]`. They are not papers in the library — never describe a web page as a library paper.
 - When evidence is weak, answer only what the library supports and state the limit.
 - When the library holds nothing relevant, say so instead of guessing.
 - Linked notes that appear next to paper chunks (via a note–paper link) are still the researcher's commentary, not claims the paper makes.

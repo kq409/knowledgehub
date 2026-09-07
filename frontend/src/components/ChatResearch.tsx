@@ -18,6 +18,7 @@ import { useSpeechToComposer } from '../hooks/useSpeechToComposer';
 
 const TOOL_LABELS: Record<string, string> = {
   search_library: 'Searching the library',
+  web_search: 'Searching the web',
   list_papers: 'Listing papers',
   list_notes: 'Listing notes',
   read_paper: 'Reading a paper',

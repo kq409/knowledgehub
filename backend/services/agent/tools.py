@@ -57,6 +57,13 @@ from services.retrieval import (
     search,
     snippet_from,
 )
+from services.web_search import (
+    ExternalHit,
+    WebSearcher,
+    WebSearchError,
+    WebSearchService,
+    web_citation_id,
+)
 
 SEARCH_EVIDENCE_CHARS = 800
 READ_EVIDENCE_CHARS = 1500
@@ -72,6 +79,7 @@ SOURCE_LABELS = {
     "paper": "Paper",
     "voice": "Voice note",
     "handwritten": "Handwritten note",
+    "web": "Web",
 }
 NOTE_DISCLAIMER = "Researcher's own note, not a paper claim"
 
@@ -173,6 +181,25 @@ class CitationRegistry:
             ),
         )
 
+    def register_web_hit(self, hit: ExternalHit) -> int:
+        ident = web_citation_id(hit.url)
+        return self._add(
+            ident,
+            lambda index: ChatCitation(
+                index=index,
+                source_type=CitationSourceType.web,
+                source_id=ident,
+                chunk_id=ident,
+                title=hit.title,
+                page=None,
+                section=None,
+                year=None,
+                snippet=hit.snippet or hit.title,
+                similarity=None,
+                url=hit.url,
+            ),
+        )
+
     def register_compare_citation(self, citation: CompareCitation) -> int:
         """Adopt a chunk the comparison workflow retrieved on its own.
 
@@ -215,6 +242,7 @@ class CitationRegistry:
                 year=citation.year,
                 snippet=citation.snippet,
                 similarity=citation.similarity,
+                url=citation.url,
             ),
         )
 
@@ -247,6 +275,7 @@ class ToolContext:
     compare: CompareService | None = None
     extraction: ExtractionService | None = None
     connect: ConnectService | None = None
+    web_search: WebSearcher | None = None
     compare_budget: int = COMPARE_CALLS_PER_TURN
     todo_store: object | None = None
     depth: int = 0
@@ -1065,10 +1094,52 @@ async def connect_note(ctx: ToolContext, **kwargs: object) -> ToolResult:
     )
 
 
+async def web_search(ctx: ToolContext, **kwargs: object) -> ToolResult:
+    query = str(kwargs.get("query") or "").strip()
+    if not query:
+        raise ToolError("query is required and cannot be empty")
+
+    searcher = ctx.web_search if ctx.web_search is not None else WebSearchService()
+    if not searcher.available():
+        return ToolResult(
+            content=(
+                "Web search is not configured. Set WEB_SEARCH_API_KEY "
+                "(a real DeepSeek key) to search outside the library. "
+                "Until then, answer from the library and say so."
+            ),
+            summary="Web search not configured",
+        )
+    try:
+        hits = await asyncio.to_thread(searcher.search, query)
+    except WebSearchError as exc:
+        return ToolResult(
+            content=f"Web search failed: {exc}. Continue with library evidence.",
+            summary="Web search failed",
+        )
+    if not hits:
+        return ToolResult(
+            content=f'No web results for "{query}".',
+            summary=f'Searched the web for "{query}" — no results',
+        )
+    blocks: list[str] = []
+    for hit in hits:
+        index = ctx.registry.register_web_hit(hit)
+        body = hit.snippet or hit.title
+        blocks.append(f"[{index}] Web — {hit.title} ({hit.url})\n{body}")
+    return ToolResult(
+        content=(
+            f'{len(hits)} web result(s) for "{query}" (not from the library):\n\n'
+            + "\n\n".join(blocks)
+        ),
+        summary=f'Searched the web for "{query}" — {len(hits)} result(s)',
+    )
+
+
 ToolHandler = Callable[..., Awaitable[ToolResult]]
 
 TOOL_HANDLERS: dict[str, ToolHandler] = {
     "search_library": search_library,
+    "web_search": web_search,
     "list_papers": list_papers,
     "list_notes": list_notes,
     "read_paper": read_paper,
@@ -1127,6 +1198,31 @@ TOOL_SCHEMAS: list[dict] = [
                         "type": "integer",
                         "description": "How many chunks to return (1-16).",
                     },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the public web for recent citable sources (not the "
+                "library). For ArXiv or preprints, put site:arxiv.org in the "
+                "query. Returns numbered Web chunks you may cite as [n]. "
+                "Not a substitute for search_library."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Search query. Include site:arxiv.org when the "
+                            "researcher asked for ArXiv."
+                        ),
+                    }
                 },
                 "required": ["query"],
             },

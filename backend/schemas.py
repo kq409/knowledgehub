@@ -345,6 +345,7 @@ class ChatCitation(BaseModel):
     year: int | None = None
     snippet: str
     similarity: float | None = None
+    url: str | None = None
 
 
 class ChatRole(str, Enum):

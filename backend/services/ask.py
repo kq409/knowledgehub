@@ -39,6 +39,7 @@ from services.web_search import (
     WebSearcher,
     WebSearchError,
     WebSearchService,
+    web_citation_id,
 )
 
 PROMPT_FILE = Path(__file__).resolve().parent.parent / "ask_research_prompt.txt"
@@ -57,10 +58,6 @@ SOURCE_LABELS = {
 
 class AskError(Exception):
     """Raised when the LLM does not return an answer."""
-
-
-def web_citation_id(url: str) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, url)
 
 
 def _location(hit: RetrievalHit) -> str:

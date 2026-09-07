@@ -40,6 +40,7 @@ def test_subagent_policy_excludes_spawn_and_compare():
     assert not policy.check("link_note").allowed
     assert not policy.check("unlink_note").allowed
     assert not policy.check("connect_note").allowed
+    assert not policy.check("web_search").allowed
     assert policy.check("memory_search").allowed
     assert policy.check("load_skill").allowed
 

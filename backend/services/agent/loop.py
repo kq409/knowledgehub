@@ -55,15 +55,17 @@ from services.agent.tools import (
     ToolError,
     ToolResult,
 )
+from services.ask_policy import QueryKind, classify_query
 from services.ask_trace import log_chat_trace
 from services.compare import CompareService
 from services.connect import ConnectService
 from services.embeddings import EmbeddingService
 from services.extraction import ExtractionService
+from services.web_search import WebSearcher
 
 PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "chat_agent_prompt.txt"
 AGENT_PROMPT = PROMPT_FILE.read_text().strip()
-PROMPT_VERSION = "chat-agent-v7"
+PROMPT_VERSION = "chat-agent-v8"
 
 MAX_ITERATIONS = 8
 MAX_TOOL_CALLS_PER_TURN = 3
@@ -76,6 +78,15 @@ FINAL_TURN_NUDGE = (
     "evidence you already retrieved, and say plainly what you could not check."
 )
 EMPTY_ANSWER = "The model returned an empty answer."
+
+FIELD_WIDE_SUFFIX = (
+    "This question asks for field-wide, latest, or SOTA progress. "
+    "Open with library coverage. Then call web_search for sources outside "
+    "the library (for ArXiv or preprints, put site:arxiv.org in the query) "
+    "unless the researcher only asked what this library holds. "
+    "If web search is not configured, say so and list the closest library papers. "
+    "Web [n] citations are not library papers."
+)
 
 
 @dataclass(frozen=True)
@@ -168,6 +179,7 @@ class ResearchAgent:
         compare: CompareService | None = None,
         extraction: ExtractionService | None = None,
         connect: ConnectService | None = None,
+        web_search: WebSearcher | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.llm_model = llm_model
@@ -178,6 +190,7 @@ class ResearchAgent:
         self.compare = compare
         self.extraction = extraction
         self.connect = connect
+        self.web_search = web_search
         self.prompt_version = PROMPT_VERSION
 
     def _protocol(
@@ -211,6 +224,7 @@ class ResearchAgent:
             compare=self.compare,
             extraction=self.extraction,
             connect=self.connect,
+            web_search=self.web_search,
             todo_store=todo_store,
             depth=0,
             subagent_budget=1,
@@ -319,6 +333,8 @@ class ResearchAgent:
         base_prompt = AGENT_PROMPT
         if recalled:
             base_prompt = f"{AGENT_PROMPT}\n\n{recalled}"
+        if classify_query(question) is QueryKind.field_wide:
+            base_prompt = f"{base_prompt}\n\n{FIELD_WIDE_SUFFIX}"
         request_id = str(uuid.uuid4())
         started = time.perf_counter()
         tools_called: list[str] = []

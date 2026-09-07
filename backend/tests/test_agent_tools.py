@@ -52,8 +52,12 @@ from services.agent.tools import (
     tool_catalog,
     unlink_note,
 )
+from services.agent.tools import (
+    web_search as web_search_tool,
+)
 from services.compare import CompareError
 from services.extraction import NoteExtractionError
+from services.web_search import ExternalHit, WebSearchError
 
 load_dotenv()
 
@@ -587,6 +591,7 @@ async def test_subagent_schema_excludes_link_tools():
     assert "unlink_note" not in names
     assert "read_paper" in names
     assert "present_workspace" not in names
+    assert "web_search" not in names
 
 
 async def test_present_workspace_opens_voice_notes():
@@ -604,3 +609,73 @@ async def test_present_workspace_rejects_unknown_module():
     ctx = ToolContext(session=MagicMock(), embeddings=MagicMock())
     with pytest.raises(ToolError, match="voice_notes"):
         await present_workspace(ctx, module="compare")
+
+
+class _ReadyWeb:
+    def available(self) -> bool:
+        return True
+
+    def search(self, query: str) -> list[ExternalHit]:
+        return [
+            ExternalHit(
+                url="https://arxiv.org/abs/2401.00001",
+                title="Survey of continual learning",
+                snippet="Recent work surveys SOTA methods.",
+            )
+        ]
+
+
+class _DisabledWeb:
+    def available(self) -> bool:
+        return False
+
+    def search(self, query: str) -> list[ExternalHit]:
+        raise WebSearchError("disabled")
+
+
+class _FailWeb:
+    def available(self) -> bool:
+        return True
+
+    def search(self, query: str) -> list[ExternalHit]:
+        raise WebSearchError("provider down")
+
+
+async def test_web_search_registers_web_citations():
+    ctx = ToolContext(
+        session=MagicMock(), embeddings=MagicMock(), web_search=_ReadyWeb()
+    )
+    result = await web_search_tool(ctx, query="continual learning site:arxiv.org")
+    assert "[1]" in result.content
+    assert "not from the library" in result.content
+    citations = ctx.registry.citations()
+    assert len(citations) == 1
+    assert citations[0].source_type is CitationSourceType.web
+    assert citations[0].url == "https://arxiv.org/abs/2401.00001"
+    assert citations[0].title == "Survey of continual learning"
+
+
+async def test_web_search_not_configured_returns_message():
+    ctx = ToolContext(
+        session=MagicMock(), embeddings=MagicMock(), web_search=_DisabledWeb()
+    )
+    result = await web_search_tool(ctx, query="SOTA continual learning")
+    assert "WEB_SEARCH_API_KEY" in result.content
+    assert ctx.registry.citations() == []
+
+
+async def test_web_search_provider_error_fails_open():
+    ctx = ToolContext(
+        session=MagicMock(), embeddings=MagicMock(), web_search=_FailWeb()
+    )
+    result = await web_search_tool(ctx, query="SOTA continual learning")
+    assert "failed" in result.content.lower()
+    assert ctx.registry.citations() == []
+
+
+async def test_web_search_requires_query():
+    ctx = ToolContext(
+        session=MagicMock(), embeddings=MagicMock(), web_search=_ReadyWeb()
+    )
+    with pytest.raises(ToolError, match="query"):
+        await web_search_tool(ctx, query="  ")
