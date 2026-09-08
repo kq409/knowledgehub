@@ -2295,7 +2295,7 @@ wheels = [
 ]
 
 [[package]]
-name = "researchpilot"
+name = "knowledgehub"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

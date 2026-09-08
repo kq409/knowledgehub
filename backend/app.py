@@ -53,7 +53,7 @@ service = None
 async def lifespan(app: FastAPI):
     """Uses OpenAI-compatible API (Ollama, OpenAI, LM Studio, etc.). Configure via .env file."""
     global service
-    print("🚀 Starting ResearchPilot...")
+    print("🚀 Starting KnowledgeHub...")
 
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -188,8 +188,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ResearchPilot",
-    description="Personal research assistant: voice notes, paper library, retrieval, and comparison",
+    title="KnowledgeHub",
+    description="Knowledge base for notes, papers, retrieval, and comparison",
     lifespan=lifespan,
 )
 

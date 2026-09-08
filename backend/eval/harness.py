@@ -517,7 +517,7 @@ async def _async_main(names: list[str], use_llm: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run ResearchPilot eval suites")
+    parser = argparse.ArgumentParser(description="Run KnowledgeHub eval suites")
     parser.add_argument(
         "--suite",
         default="ask",

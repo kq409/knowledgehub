@@ -1,7 +1,7 @@
 [project]
-name = "researchpilot"
+name = "knowledgehub"
 version = "0.1.0"
-description = "Personal research assistant: voice notes, paper library, retrieval, and comparison"
+description = "Knowledge base for notes, papers, retrieval, and comparison"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

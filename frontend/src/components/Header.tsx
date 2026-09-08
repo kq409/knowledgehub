@@ -24,9 +24,9 @@ export function Header({ onOpenEval }: { onOpenEval?: () => void }) {
   return (
     <header className={styles.header}>
       <div className={styles.brand}>
-        <h1 className={styles.title}>ResearchPilot</h1>
+        <h1 className={styles.title}>KnowledgeHub</h1>
         <p className={styles.subtitle}>
-          Capture ideas, build a library, and ask your research
+          Your notes and papers, searchable and citable
         </p>
       </div>
       <div className={styles.settingsWrap} ref={panelRef}>

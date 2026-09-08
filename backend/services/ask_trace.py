@@ -52,7 +52,7 @@ def _opik_trace(name: str, *, inputs: dict, output: dict, metadata: dict) -> Non
         return
     try:
         client = Opik(
-            project_name=os.getenv("OPIK_PROJECT_NAME", "researchpilot-ask"),
+            project_name=os.getenv("OPIK_PROJECT_NAME", "knowledgehub-ask"),
             workspace=os.getenv("OPIK_WORKSPACE") or None,
         )
         trace = client.trace(

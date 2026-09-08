@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Setting up ResearchPilot development environment..."
+echo "🚀 Setting up KnowledgeHub development environment..."
 
 # Ensure cache directories exist with proper permissions
 mkdir -p "$HOME/.cache/uv" "$HOME/.cache/huggingface"

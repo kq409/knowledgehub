@@ -1,4 +1,4 @@
-# ResearchPilot
+# KnowledgeHub
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 ![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)
@@ -6,7 +6,7 @@
 ![LLM](https://img.shields.io/badge/LLM-OpenAI_Compatible-7C3AED)
 [![CI](https://github.com/kq409/researchpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/kq409/researchpilot/actions/workflows/ci.yml)
 
-Personal research assistant for capturing ideas, organizing papers, and asking questions against your own library.
+Knowledge base for capturing ideas, organizing papers, and asking questions against your own library.
 
 Voice notes go through local Whisper transcription and LLM cleanup, then become structured research notes. Papers live in a searchable library. Chat retrieves over what you have stored, and can search the web for field-wide or latest-progress questions when configured.
 
@@ -109,7 +109,7 @@ npm install && npm run dev
 
 ## Configuration
 
-ResearchPilot talks to any OpenAI-compatible LLM provider:
+KnowledgeHub talks to any OpenAI-compatible LLM provider:
 
 - **Ollama** (default in the devcontainer)
 - **LM Studio**
@@ -219,7 +219,7 @@ The Chat subagent tools (`search_library`, `list_papers`, `list_notes`, `read_pa
 ```json
 {
   "mcpServers": {
-    "researchpilot": {
+    "knowledgehub": {
       "command": "uv",
       "args": ["run", "python", "-m", "mcp_server"],
       "cwd": "/absolute/path/to/researchpilot/backend"

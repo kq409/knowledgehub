@@ -1,5 +1,5 @@
 {
-  "name": "ResearchPilot",
+  "name": "KnowledgeHub",
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspaces/researchpilot",

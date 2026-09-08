@@ -43,7 +43,7 @@ SUBAGENT_CALLS_PER_TURN = 1
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 
 SUBAGENT_PROMPT = """
-You are a nested research pass inside ResearchPilot. Complete only the goal
+You are a nested research pass inside KnowledgeHub. Complete only the goal
 below using the library tools you have. Cite with the [n] numbers from your
 tool results. When finished, write a short factual summary for the parent
 assistant — not a letter to the researcher. Do not claim field-wide SOTA.

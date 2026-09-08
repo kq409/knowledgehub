@@ -1,4 +1,4 @@
-"""Read-only MCP server wrapping ResearchPilot library tools.
+"""Read-only MCP server wrapping KnowledgeHub library tools.
 
 Run from backend/: ``uv run python -m mcp_server``
 """
@@ -63,7 +63,7 @@ def _ensure_db() -> None:
 def create_mcp():
     from mcp.server.fastmcp import FastMCP
 
-    mcp = FastMCP("researchpilot")
+    mcp = FastMCP("knowledgehub")
     embeddings = _embeddings()
 
     async def _call(name: str, **kwargs: Any) -> str:

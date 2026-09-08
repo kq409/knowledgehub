@@ -1,8 +1,8 @@
 {
-  "name": "researchpilot-frontend",
+  "name": "knowledgehub-frontend",
   "private": true,
   "version": "0.1.0",
-  "description": "ResearchPilot web UI: voice notes, paper library, ask, and compare",
+  "description": "KnowledgeHub web UI: voice notes, paper library, ask, and compare",
   "type": "module",
   "engines": {
     "node": ">=24.0.0",
