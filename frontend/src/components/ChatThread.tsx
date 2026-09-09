@@ -15,6 +15,7 @@ import type {
   SkillArtifact,
   TodoStatus,
 } from '../types';
+import { MarkdownAnswer } from './MarkdownAnswer';
 import { Spinner } from './Spinner';
 import {
   CompactionNotices,
@@ -204,43 +205,63 @@ function TodoPanel({ items }: { items: ChatTodoItem[] }) {
 }
 
 function Citations({ citations }: { citations: ChatCitation[] }) {
+  const [open, setOpen] = useState(false);
+
   if (citations.length === 0) {
     return null;
   }
+
   return (
-    <ol className={styles.citations}>
-      {citations.map((citation) => (
-        <li
-          key={citation.chunk_id ?? citation.url ?? String(citation.index)}
-          className={styles.citation}
-        >
-          <div className={styles.citationHeader}>
-            <span className={styles.index}>[{citation.index}]</span>
-            <span
-              className={`${styles.badge} ${badgeClass(citation.source_type)}`}
+    <div className={styles.citeBlock}>
+      <button
+        type="button"
+        className={styles.citeToggle}
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {open ? (
+          <ChevronDown className={styles.citeChevron} />
+        ) : (
+          <ChevronRight className={styles.citeChevron} />
+        )}
+        {citations.length} citation{citations.length === 1 ? '' : 's'}
+      </button>
+      {open && (
+        <ol className={styles.citations}>
+          {citations.map((citation) => (
+            <li
+              key={citation.chunk_id ?? citation.url ?? String(citation.index)}
+              className={styles.citation}
             >
-              {sourceLabel(citation.source_type)}
-            </span>
-            {citation.url ? (
-              <a
-                className={styles.citationTitle}
-                href={citation.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {citation.title}
-              </a>
-            ) : (
-              <span className={styles.citationTitle}>{citation.title}</span>
-            )}
-          </div>
-          <p className={styles.citationMeta}>{citationMeta(citation)}</p>
-          {citation.snippet ? (
-            <p className={styles.snippet}>{citation.snippet}</p>
-          ) : null}
-        </li>
-      ))}
-    </ol>
+              <div className={styles.citationHeader}>
+                <span className={styles.index}>[{citation.index}]</span>
+                <span
+                  className={`${styles.badge} ${badgeClass(citation.source_type)}`}
+                >
+                  {sourceLabel(citation.source_type)}
+                </span>
+                {citation.url ? (
+                  <a
+                    className={styles.citationTitle}
+                    href={citation.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {citation.title}
+                  </a>
+                ) : (
+                  <span className={styles.citationTitle}>{citation.title}</span>
+                )}
+              </div>
+              <p className={styles.citationMeta}>{citationMeta(citation)}</p>
+              {citation.snippet ? (
+                <p className={styles.snippet}>{citation.snippet}</p>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
   );
 }
 
@@ -286,7 +307,7 @@ function AssistantBody({ turn }: { turn: ChatTurn }) {
         <TurnArtifact key={artifactIndex} artifact={artifact} />
       ))}
 
-      {turn.answer && <p className={styles.answer}>{turn.answer}</p>}
+      {turn.answer && <MarkdownAnswer text={turn.answer} />}
 
       {turn.error && (
         <p className={styles.caveat} role="status">
@@ -294,12 +315,7 @@ function AssistantBody({ turn }: { turn: ChatTurn }) {
         </p>
       )}
 
-      {turn.model && (
-        <p className={styles.modelMeta}>
-          {turn.model}
-          {` · ${turn.citations.length} cited chunk(s)`}
-        </p>
-      )}
+      {turn.model && <p className={styles.modelMeta}>{turn.model}</p>}
 
       <Citations citations={turn.citations} />
     </div>
