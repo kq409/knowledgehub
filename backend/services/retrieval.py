@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 from dataclasses import dataclass, replace
 
@@ -622,7 +623,9 @@ def _lexical_tokens(query_text: str) -> list[str]:
     tokens: list[str] = []
     for raw in query_text.split():
         token = raw.strip("?.,:;\"'()[]").strip()
-        if len(token) >= 4 and token.lower() not in _LEXICAL_STOP:
+        if token.lower() in _LEXICAL_STOP:
+            continue
+        if len(token) >= 4 or (len(token) >= 3 and token.isupper()):
             tokens.append(token)
     return tokens
 
@@ -647,6 +650,197 @@ def _title_boost(title_column, query_text: str):
             else_=0.0,
         )
     return boost
+
+
+_TITLE_STOP = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "of",
+        "for",
+        "in",
+        "on",
+        "and",
+        "or",
+        "to",
+        "with",
+        "via",
+        "by",
+    }
+)
+ACRONYM_TITLE_RANK = 50.0
+
+
+def title_acronyms(title: str) -> set[str]:
+    """Initialisms a researcher might type for this title.
+
+    "Gradient Episodic Memory for Continual Learning" yields GEM (the method
+    name the paper uses) as well as longer forms from consecutive content words.
+    Tokens already written in ALL CAPS, like ELLA in a title, are kept as-is.
+    """
+    words = re.findall(r"[A-Za-z0-9]+", title)
+    if not words:
+        return set()
+    found: set[str] = set()
+    for word in words:
+        if 3 <= len(word) <= 8 and word.isupper():
+            found.add(word.upper())
+    significant = [word for word in words if word.lower() not in _TITLE_STOP]
+    for length in range(3, len(significant) + 1):
+        for start in range(0, len(significant) - length + 1):
+            acronym = "".join(word[0] for word in significant[start : start + length])
+            if 3 <= len(acronym) <= 8:
+                found.add(acronym.upper())
+    return found
+
+
+def query_acronyms(query_text: str) -> set[str]:
+    """ALL-CAPS tokens, plus a query that is itself a short name."""
+    found = {
+        token.upper()
+        for token in re.findall(r"\b[A-Z]{3,8}\b", query_text)
+        if token.lower() not in _TITLE_STOP and token.lower() not in _LEXICAL_STOP
+    }
+    stripped = query_text.strip("?.,:;\"'! ")
+    if stripped.isalpha() and 3 <= len(stripped) <= 8:
+        found.add(stripped.upper())
+    return found
+
+
+async def _title_acronym_hits(
+    session: AsyncSession,
+    query_text: str,
+    *,
+    include_papers: bool,
+    include_voice_notes: bool,
+    include_handwritten_notes: bool,
+    include_documents: bool,
+    paper_ids: list[uuid.UUID] | None,
+) -> list[RetrievalHit]:
+    wanted = query_acronyms(query_text)
+    if not wanted:
+        return []
+
+    hits: list[RetrievalHit] = []
+    if include_papers:
+        papers = await list_library_papers(session)
+        matching = [
+            row
+            for row in papers
+            if row.processing_status == PaperStatus.ready.value
+            and wanted & title_acronyms(row.title)
+            and (paper_ids is None or row.id in paper_ids)
+        ]
+        if matching:
+            ids = [row.id for row in matching]
+            result = await session.execute(
+                select(PaperChunk, Paper)
+                .join(Paper, Paper.id == PaperChunk.paper_id)
+                .where(PaperChunk.paper_id.in_(ids), PaperChunk.chunk_index == 0)
+            )
+            by_id = {paper.id: (chunk, paper) for chunk, paper in result.all()}
+            for row in matching:
+                pair = by_id.get(row.id)
+                if pair is None:
+                    continue
+                chunk, paper = pair
+                hits.append(
+                    RetrievalHit(
+                        source_type="paper",
+                        source_id=paper.id,
+                        chunk_id=chunk.id,
+                        title=paper.title,
+                        page=chunk.page,
+                        section=chunk.section,
+                        text=chunk.text,
+                        similarity=0.0,
+                        year=paper.year,
+                        rank_score=ACRONYM_TITLE_RANK,
+                    )
+                )
+
+    source_types: list[str] = []
+    if include_voice_notes:
+        source_types.append(NoteSourceType.voice.value)
+    if include_handwritten_notes:
+        source_types.append(NoteSourceType.handwritten.value)
+    if source_types and paper_ids is None:
+        notes = await list_library_notes(session, source_types=source_types)
+        matching_notes = [
+            row
+            for row in notes
+            if row.processing_status == ProcessingStatus.ready.value
+            and wanted & title_acronyms(row.title)
+        ]
+        if matching_notes:
+            ids = [row.id for row in matching_notes]
+            result = await session.execute(
+                select(NoteChunk, Note)
+                .join(Note, Note.id == NoteChunk.note_id)
+                .where(NoteChunk.note_id.in_(ids), NoteChunk.chunk_index == 0)
+            )
+            by_id = {note.id: (chunk, note) for chunk, note in result.all()}
+            for row in matching_notes:
+                pair = by_id.get(row.id)
+                if pair is None:
+                    continue
+                chunk, note = pair
+                hits.append(
+                    RetrievalHit(
+                        source_type=note.source_type,
+                        source_id=note.id,
+                        chunk_id=chunk.id,
+                        title=note.title,
+                        page=chunk.page,
+                        section=chunk.section,
+                        text=chunk.text,
+                        similarity=0.0,
+                        rank_score=ACRONYM_TITLE_RANK,
+                    )
+                )
+
+    if include_documents and paper_ids is None:
+        documents = await list_library_documents(session)
+        matching_docs = [
+            row
+            for row in documents
+            if row.processing_status == ProcessingStatus.ready.value
+            and wanted & title_acronyms(row.title)
+        ]
+        if matching_docs:
+            ids = [row.id for row in matching_docs]
+            result = await session.execute(
+                select(LibraryDocumentChunk, LibraryDocument)
+                .join(
+                    LibraryDocument,
+                    LibraryDocument.id == LibraryDocumentChunk.document_id,
+                )
+                .where(
+                    LibraryDocumentChunk.document_id.in_(ids),
+                    LibraryDocumentChunk.chunk_index == 0,
+                )
+            )
+            by_id = {document.id: (chunk, document) for chunk, document in result.all()}
+            for row in matching_docs:
+                pair = by_id.get(row.id)
+                if pair is None:
+                    continue
+                chunk, document = pair
+                hits.append(
+                    RetrievalHit(
+                        source_type="document",
+                        source_id=document.id,
+                        chunk_id=chunk.id,
+                        title=document.title,
+                        page=chunk.page,
+                        section=chunk.section,
+                        text=chunk.text,
+                        similarity=0.0,
+                        rank_score=ACRONYM_TITLE_RANK,
+                    )
+                )
+    return hits
 
 
 async def _lexical_search(
@@ -680,6 +874,25 @@ async def _lexical_search(
                 paper_ids=paper_ids,
             )
         )
+        hits.extend(
+            await _title_acronym_hits(
+                session,
+                query_text,
+                include_papers=include_papers,
+                include_voice_notes=include_voice_notes,
+                include_handwritten_notes=include_handwritten_notes,
+                include_documents=include_documents,
+                paper_ids=paper_ids,
+            )
+        )
+        unique: dict[uuid.UUID, RetrievalHit] = {}
+        for hit in hits:
+            existing = unique.get(hit.chunk_id)
+            if existing is None or (hit.rank_score or 0.0) > (
+                existing.rank_score or 0.0
+            ):
+                unique[hit.chunk_id] = hit
+        hits = list(unique.values())
         hits.sort(key=lambda hit: hit.rank_score or 0.0, reverse=True)
         return hits[:top_k]
     except (ProgrammingError, OperationalError):

@@ -1655,8 +1655,10 @@ TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "search_library",
             "description": (
-                "Semantic search over the researcher's papers, notes, and documents. "
-                "Returns numbered chunks you may cite as [n]."
+                "Semantic and keyword search over the researcher's papers, "
+                "notes, and documents. Short names match title initialisms "
+                "(GEM finds Gradient Episodic Memory). Returns numbered "
+                "chunks you may cite as [n]."
             ),
             "parameters": {
                 "type": "object",

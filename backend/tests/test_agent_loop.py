@@ -832,6 +832,27 @@ async def test_empty_plan_answers_without_tools(library: Library):
     assert "How to call a tool" not in answer_system
 
 
+async def test_empty_plan_still_searches_a_named_acronym(library: Library):
+    client = scripted_llm(
+        planned(),
+        "No GEM paper showed up in this test library.",
+    )
+    agent = text_protocol_agent(client)
+
+    events = [
+        event
+        async for event in agent.run(
+            library.session,
+            ask("give me a short summary of GEM. less than 50 words."),
+        )
+    ]
+
+    assert [data["name"] for data in events_of(events, ChatEventType.tool_call)] == [
+        "search_library"
+    ]
+    assert "GEM" in events_of(events, ChatEventType.tool_call)[0]["arguments"]["query"]
+
+
 async def test_empty_plan_retry_enables_tools(library: Library):
     client = scripted_llm(
         planned(),

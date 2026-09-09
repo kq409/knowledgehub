@@ -115,3 +115,37 @@ async def test_hybrid_finds_lexical_hit_that_dense_misses(session, monkeypatch):
         for paper in (dense_paper, lexical_paper, *fillers):
             await session.delete(paper)
         await session.commit()
+
+
+async def test_hybrid_search_matches_title_initialism(session, monkeypatch):
+    """GEM should find Gradient Episodic Memory even when the body never says GEM."""
+    monkeypatch.delenv("RERANK_ENABLED", raising=False)
+    gem = await _insert(
+        session,
+        f"Gradient Episodic Memory for Continual Learning {uuid.uuid4()}",
+        "A model observes a sequence of tasks and stores examples from each.",
+        FAR,
+    )
+    near = await _insert(
+        session,
+        f"Unrelated neural nets {uuid.uuid4()}",
+        "Convolutional networks classify images.",
+        NEAR,
+    )
+    try:
+        hits = await search(
+            session,
+            NEAR,
+            query_text="GEM",
+            include_voice_notes=False,
+            include_handwritten_notes=False,
+            include_documents=False,
+            top_k=8,
+            paper_ids=[gem.id, near.id],
+            expand_links=False,
+        )
+        assert gem.id in {hit.source_id for hit in hits}
+    finally:
+        for paper in (gem, near):
+            await session.delete(paper)
+        await session.commit()

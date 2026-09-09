@@ -5,6 +5,8 @@ from services.retrieval import (
     RetrievalHit,
     filter_by_min_similarity,
     is_insufficient,
+    query_acronyms,
+    title_acronyms,
 )
 
 
@@ -32,3 +34,18 @@ def test_is_insufficient_uses_max_similarity():
     assert is_insufficient([], 0.35) is True
     assert is_insufficient([_hit(0.20)], 0.35) is True
     assert is_insufficient([_hit(0.68), _hit(0.20)], 0.35) is False
+
+
+def test_title_acronyms_include_method_initialisms():
+    names = title_acronyms("Gradient Episodic Memory for Continual Learning")
+    assert "GEM" in names
+    assert "ELLA" in title_acronyms("ELLA: An Efficient Lifelong Learning Algorithm")
+    assert "GEM" in title_acronyms("Notes of GEM")
+
+
+def test_query_acronyms_pick_uppercase_tokens():
+    assert query_acronyms("give me a short summary of GEM. less than 50 words.") == {
+        "GEM"
+    }
+    assert query_acronyms("gem") == {"GEM"}
+    assert "ME" not in query_acronyms("give me a short summary")

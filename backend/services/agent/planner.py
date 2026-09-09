@@ -8,7 +8,9 @@ loop should answer without library tools.
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,8 +28,24 @@ PLANNER_PROMPT = PROMPT_FILE.read_text().strip()
 PLANNER_MAX_TOKENS = 800
 PLANNER_TEMPERATURE = 0.0
 PLANNER_MAX_TOOLS = 3
+HISTORY_TURNS = 6
+HISTORY_CHARS = 400
 
 _TOOL_NAMES = tuple(sorted(TOOL_HANDLERS))
+
+_ACRONYM = re.compile(r"\b([A-Z]{3,8})\b")
+_CLARIFY = re.compile(
+    r"^(?:it'?s|that(?:'s| is)|i mean(?:t)?)\s+(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_NAMED_LOOKUP = re.compile(
+    r"(?:summar(?:y|ise|ize)|explain|overview|describe|"
+    r"what(?:'s| is)|tell me about)\s+(?:of\s+|on\s+|for\s+)?(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_SKIP_ACRONYMS = frozenset(
+    {"PDF", "DOI", "URL", "HTTP", "HTTPS", "JSON", "HTML", "LLM"}
+)
 
 
 @dataclass(frozen=True)
@@ -99,20 +117,90 @@ def calls_from_payload(
     return calls
 
 
+def fallback_search_query(question: str) -> str | None:
+    """A library search string when the planner skipped a named lookup."""
+    text = " ".join(question.strip().split())
+    if not text:
+        return None
+
+    clarified = _CLARIFY.match(text)
+    if clarified:
+        name = re.split(r"[.]", clarified.group(1).strip(), maxsplit=1)[0].strip(" ?!")
+        if len(name) >= 3:
+            return name
+
+    acronyms = [
+        token for token in _ACRONYM.findall(text) if token not in _SKIP_ACRONYMS
+    ]
+    if acronyms:
+        return acronyms[-1]
+
+    if re.search(r"\b(?:my|the|this)\s+library\b", text, re.IGNORECASE):
+        return None
+
+    named = _NAMED_LOOKUP.search(text)
+    if named:
+        name = re.split(r"[.]", named.group(1).strip(), maxsplit=1)[0].strip(" ?!")
+        words = name.split()
+        if 1 <= len(words) <= 12 and len(name) >= 3 and "library" not in name.lower():
+            return name
+    return None
+
+
+def ensure_library_search(plan: ToolPlan, question: str) -> ToolPlan:
+    """Search the library when the planner returned nothing for a named work."""
+    if plan.failed or plan.calls:
+        return plan
+    query = fallback_search_query(question)
+    if not query:
+        return plan
+    return ToolPlan(
+        calls=[
+            ToolCall(
+                id=f"plan_{uuid.uuid4().hex[:12]}",
+                name="search_library",
+                arguments={"query": query},
+            )
+        ]
+    )
+
+
+def _history_block(history: Sequence[Any] | None) -> str:
+    if not history:
+        return ""
+    lines: list[str] = []
+    for message in list(history)[-HISTORY_TURNS:]:
+        role = getattr(message, "role", None)
+        content = getattr(message, "content", None)
+        if role is None or not isinstance(content, str):
+            continue
+        label = role.value if hasattr(role, "value") else str(role)
+        text = " ".join(content.split())
+        if len(text) > HISTORY_CHARS:
+            text = text[:HISTORY_CHARS].rstrip() + "…"
+        if text:
+            lines.append(f"{label}: {text}")
+    if not lines:
+        return ""
+    return "Earlier in this conversation:\n" + "\n".join(lines) + "\n\n"
+
+
 async def plan_tools(
     llm_client: OpenAI,
     llm_model: str,
     question: str,
     *,
     catalog: str | None = None,
+    history: Sequence[Any] | None = None,
 ) -> ToolPlan:
     """Ask the model which tools this message needs. Failures skip the plan."""
     listing = catalog if catalog is not None else tool_catalog(TOOL_SCHEMAS)
+    earlier = _history_block(history)
     messages = [
         {"role": "system", "content": PLANNER_PROMPT},
         {
             "role": "user",
-            "content": f"Message:\n{question}\n\nTools:\n{listing}",
+            "content": f"{earlier}Message:\n{question}\n\nTools:\n{listing}",
         },
     ]
     effort = effort_from_env(
@@ -135,4 +223,4 @@ async def plan_tools(
 
     if not isinstance(payload, dict):
         return ToolPlan(failed=True)
-    return ToolPlan(calls=calls_from_payload(payload))
+    return ensure_library_search(ToolPlan(calls=calls_from_payload(payload)), question)

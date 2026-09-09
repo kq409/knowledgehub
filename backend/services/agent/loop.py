@@ -850,7 +850,12 @@ class ResearchAgent:
             prompt_version=self.prompt_version,
         )
 
-        plan = await plan_tools(self.llm_client, self.llm_model, question)
+        plan = await plan_tools(
+            self.llm_client,
+            self.llm_model,
+            question,
+            history=payload.messages[:-1],
+        )
         tools_enabled = not plan.disables_tools
         base_prompt = armed_prompt
         if plan.disables_tools:
