@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
+    LibraryDocument,
     Note,
     NoteSourceType,
     Paper,
@@ -13,10 +14,13 @@ from models import (
     ProcessingStatus,
     ReviewStatus,
 )
+from services.document_pipeline import document_file_path
 from services.note_pipeline import note_file_path
 from services.paper_pipeline import paper_file_path
 
 MAX_PDF_BYTES = 50 * 1024 * 1024
+MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+ALLOWED_DOCUMENT_SUFFIXES = {".pdf", ".md", ".txt", ".csv", ".docx"}
 
 
 def validate_pdf_bytes(
@@ -90,3 +94,52 @@ async def create_pending_handwritten_note(
     await session.commit()
     await session.refresh(note)
     return note
+
+
+def validate_library_file(
+    filename: str | None,
+    content_type: str | None,
+    content: bytes,
+    *,
+    fallback_name: str,
+) -> str:
+    name = filename or fallback_name
+    suffix = Path(name).suffix.lower()
+    ctype = (content_type or "").lower()
+    if suffix not in ALLOWED_DOCUMENT_SUFFIXES and "pdf" not in ctype:
+        raise ValueError(
+            "Please attach a PDF, Markdown, text, CSV, or Word (.docx) file"
+        )
+    if ctype.startswith("audio/"):
+        raise ValueError(
+            "Audio belongs in Voice notes. Attach a PDF or a document instead."
+        )
+    if not content:
+        raise ValueError("Uploaded file is empty")
+    limit = MAX_PDF_BYTES if suffix == ".pdf" or "pdf" in ctype else MAX_DOCUMENT_BYTES
+    if len(content) > limit:
+        raise ValueError("File is larger than 50MB")
+    return name
+
+
+async def create_pending_document(
+    session: AsyncSession,
+    content: bytes,
+    filename: str,
+    mime_type: str | None = None,
+) -> LibraryDocument:
+    document_id = uuid.uuid4()
+    dest = document_file_path(document_id, filename)
+    dest.write_bytes(content)
+    document = LibraryDocument(
+        id=document_id,
+        title=Path(filename).stem or "Untitled document",
+        original_filename=filename,
+        original_file=str(dest),
+        mime_type=mime_type,
+        processing_status=ProcessingStatus.pending.value,
+    )
+    session.add(document)
+    await session.commit()
+    await session.refresh(document)
+    return document

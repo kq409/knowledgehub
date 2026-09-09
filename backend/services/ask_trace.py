@@ -43,27 +43,38 @@ def _append_jsonl(name: str, payload: dict[str, Any]) -> None:
         handle.write(line + "\n")
 
 
+_opik_client: Any = None
+
+
+def _get_opik_client() -> Any:
+    """Reuse one Opik client so each Chat/Ask turn does not re-init logging."""
+    global _opik_client
+    if _opik_client is not None:
+        return _opik_client
+    from opik import Opik
+
+    _opik_client = Opik(
+        project_name=os.getenv("OPIK_PROJECT_NAME", "knowledgehub-ask"),
+        workspace=os.getenv("OPIK_WORKSPACE") or None,
+    )
+    return _opik_client
+
+
 def _opik_trace(name: str, *, inputs: dict, output: dict, metadata: dict) -> None:
     if not opik_configured():
         return
     try:
-        from opik import Opik
-    except ImportError:
-        return
-    try:
-        client = Opik(
-            project_name=os.getenv("OPIK_PROJECT_NAME", "knowledgehub-ask"),
-            workspace=os.getenv("OPIK_WORKSPACE") or None,
-        )
-        trace = client.trace(
+        client = _get_opik_client()
+        # Pass output at creation. Do not call Trace.end() immediately: Opik's
+        # default batching warns that a create-then-end race can drop the span.
+        client.trace(
             name=name,
             input=inputs,
             output=output,
             metadata=metadata,
         )
-        end = getattr(trace, "end", None)
-        if callable(end):
-            end()
+    except ImportError:
+        return
     except Exception as exc:
         print(f"⚠️  Opik trace skipped: {exc}", flush=True)
 

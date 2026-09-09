@@ -8,6 +8,7 @@ events under a child `agent_id`.
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from services.agent.compact import (
     compact_messages,
     repair_tool_pairing,
 )
+from services.agent.events import AgentEvent, EventSink
+from services.agent.hooks import ToolHookContext, default_hooks
 from services.agent.permissions import subagent_policy
 from services.agent.protocol import ProtocolSwitchedError
 from services.agent.tools import (
@@ -32,7 +35,7 @@ from services.agent.tools import (
 )
 
 if TYPE_CHECKING:
-    from services.agent.loop import AgentEvent, ResearchAgent
+    from services.agent.loop import ResearchAgent
     from services.agent.protocol import ToolCall
 
 MAX_SUBAGENT_ITERATIONS = 4
@@ -69,8 +72,6 @@ def _remap_citations(text: str, mapping: dict[int, int]) -> str:
 
 
 def _event(event_type: ChatEventType, data: dict, *, agent_id: str) -> AgentEvent:
-    from services.agent.loop import AgentEvent
-
     payload = {**data, "agent_id": agent_id}
     return AgentEvent(type=event_type, data=payload)
 
@@ -80,13 +81,13 @@ async def run_spawned_subagent(
     parent_ctx: ToolContext,
     call: ToolCall,
     holder: SpawnHolder,
+    *,
+    run_id: str = "",
 ) -> AsyncGenerator[AgentEvent, None]:
     """Stream nested work for one `spawn_subagent` call; set holder.result."""
     from services.agent.loop import (
         MAX_TOOL_RESULT_CHARS,
-        AgentEvent,
         budget_skip_result,
-        refusal_result,
         run_tool,
     )
 
@@ -152,7 +153,10 @@ async def run_spawned_subagent(
         subagent_budget=0,
     )
 
-    policy = subagent_policy()
+    # The nested pass gets its own hook chain: a read-only policy, and the same
+    # metrics hook, so its tool calls show up in the logs tagged with agent_id.
+    hooks = default_hooks(subagent_policy())
+    sink = EventSink()
     schemas = schemas_for_tools(SUBAGENT_TOOL_NAMES)
     protocol = parent._protocol(tool_schemas=schemas, allowed_tools=SUBAGENT_TOOL_NAMES)
     base_prompt = SUBAGENT_PROMPT + f"\n\nGoal: {goal}" + paper_hint
@@ -211,12 +215,15 @@ async def run_spawned_subagent(
                         {
                             "name": child_call.name,
                             "arguments": child_call.arguments,
+                            "call_id": child_call.id,
                         },
                         agent_id=agent_id,
                     )
                     if skipped:
                         result = budget_skip_result(
-                            child_call, MAX_SUBAGENT_TOOL_CALLS_PER_TURN
+                            child_call,
+                            MAX_SUBAGENT_TOOL_CALLS_PER_TURN,
+                            scope="nested pass",
                         )
                         permission_payload = {
                             "decision": "skip",
@@ -226,20 +233,37 @@ async def run_spawned_subagent(
                             ),
                         }
                     else:
-                        permission = policy.check(child_call.name)
-                        if permission.allowed:
+                        hook_ctx = ToolHookContext(
+                            call=child_call,
+                            run_id=run_id,
+                            agent_id=agent_id,
+                            depth=child_ctx.depth,
+                            sink=sink,
+                        )
+                        decision = await hooks.pre(hook_ctx)
+                        for pending in sink.drain():
+                            yield pending
+                        if decision is None:
+                            started = time.perf_counter()
                             result = await run_tool(child_ctx, child_call)
+                            await hooks.post(
+                                hook_ctx,
+                                result,
+                                (time.perf_counter() - started) * 1000,
+                            )
+                            permission_payload = {"decision": "allow", "reason": ""}
                         else:
-                            result = refusal_result(child_call, permission)
-                        permission_payload = {
-                            "decision": permission.decision.value,
-                            "reason": permission.reason,
-                        }
+                            result = decision.result
+                            permission_payload = {
+                                "decision": decision.decision,
+                                "reason": decision.reason,
+                            }
                     yield _event(
                         ChatEventType.tool_result,
                         {
                             "name": child_call.name,
                             "summary": result.summary,
+                            "call_id": child_call.id,
                             "permission": permission_payload,
                         },
                         agent_id=agent_id,

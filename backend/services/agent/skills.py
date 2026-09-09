@@ -1,12 +1,21 @@
 """On-disk skills the agent loads into context on demand.
 
 Skills live as markdown files under backend/skills/ with YAML frontmatter
-(name, description) and a body. They are never injected into the default
-system prompt — the model calls list_skills / load_skill when it needs them.
+(name, description) and a body. Only the one-line descriptions go into the
+system prompt, as a catalog; the bodies stay on disk until `load_skill` pulls
+one in. That split is the whole point: five full skills would cost more
+context than the conversation, while five descriptions cost five lines and are
+enough for the model to know what exists.
+
+The catalog is read once at startup and cached. It used to be re-read from disk
+on every `list_skills` and every `load_skill`, which meant a directory scan and
+five file reads inside a request that was already waiting on a model. Call
+`reload_skills()` after editing a skill file.
 """
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,8 +56,7 @@ def _parse_frontmatter(raw: str) -> tuple[dict[str, str], str]:
     return meta, body
 
 
-def load_all_skills(directory: Path | None = None) -> dict[str, Skill]:
-    root = directory if directory is not None else SKILLS_DIR
+def _scan(root: Path) -> dict[str, Skill]:
     skills: dict[str, Skill] = {}
     if not root.is_dir():
         return skills
@@ -62,8 +70,55 @@ def load_all_skills(directory: Path | None = None) -> dict[str, Skill]:
     return skills
 
 
+_cache: dict[str, Skill] | None = None
+_lock = threading.Lock()
+
+
+def load_all_skills(directory: Path | None = None) -> dict[str, Skill]:
+    """The skill catalog. Cached unless an explicit directory is given.
+
+    Tests pass a directory to read a fixture, and those reads deliberately
+    bypass the cache so one test cannot poison another.
+    """
+    if directory is not None:
+        return _scan(directory)
+
+    global _cache
+    if _cache is None:
+        with _lock:
+            if _cache is None:
+                _cache = _scan(SKILLS_DIR)
+    return _cache
+
+
+def reload_skills() -> dict[str, Skill]:
+    """Re-read the skills directory. For startup and for editing a skill."""
+    global _cache
+    with _lock:
+        _cache = _scan(SKILLS_DIR)
+    return _cache
+
+
 def list_skill_summaries(directory: Path | None = None) -> list[Skill]:
     return list(load_all_skills(directory).values())
+
+
+def skill_catalog(directory: Path | None = None) -> str:
+    """`name: description` lines for the system prompt.
+
+    Without this the model has to spend a tool call on `list_skills` just to
+    learn that a skill covering its question exists — and often does not
+    bother, answering from the default prompt instead.
+    """
+    skills = list_skill_summaries(directory)
+    if not skills:
+        return ""
+    lines = [
+        f"- {skill.name}: {skill.description}" for skill in skills if skill.description
+    ]
+    if not lines:
+        return ""
+    return "Installed skills (call load_skill with the name):\n" + "\n".join(lines)
 
 
 def get_skill(name: str, directory: Path | None = None) -> Skill:

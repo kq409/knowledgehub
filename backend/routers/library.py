@@ -12,7 +12,7 @@ from routers.notes import to_response as note_to_response
 from routers.papers import schedule_paper_processing
 from routers.papers import to_response as paper_to_response
 from schemas import LibraryUploadResponse
-from services.document_classifier import classify_pdf
+from services.document_classifier import classify_attachment
 from services.library_ingest import (
     create_pending_handwritten_note,
     create_pending_paper,
@@ -41,7 +41,13 @@ async def upload_library_pdf(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    kind = await asyncio.to_thread(classify_pdf, content)
+    kind = await asyncio.to_thread(
+        classify_attachment,
+        filename=filename,
+        content=content,
+        content_type=file.content_type,
+        prompt="",
+    )
     if kind == "paper":
         paper = await create_pending_paper(session, content, filename)
         print(

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Note, NoteSourceType, Paper
+from models import LibraryDocument, Note, NoteSourceType, Paper
 from schemas import (
     DEFAULT_COMPARE_DIMENSIONS,
     ArtifactKind,
@@ -47,12 +47,15 @@ from services.note_links import (
 )
 from services.retrieval import (
     DocumentChunk,
+    LibraryDocumentRow,
     LibraryNoteRow,
     LibraryPaperRow,
     RetrievalHit,
     clamp_top_k,
+    list_library_documents,
     list_library_notes,
     list_library_papers,
+    read_document_chunks,
     read_paper_chunks,
     search,
     snippet_from,
@@ -79,14 +82,17 @@ SOURCE_LABELS = {
     "paper": "Paper",
     "voice": "Voice note",
     "handwritten": "Handwritten note",
+    "document": "Document",
     "web": "Web",
 }
 NOTE_DISCLAIMER = "Researcher's own note, not a paper claim"
+DOCUMENT_DISCLAIMER = "Library document, not a published paper or a personal note"
 
 PAPER_SOURCE = "papers"
 VOICE_SOURCE = "voice_notes"
 HANDWRITTEN_SOURCE = "handwritten_notes"
-ALL_SOURCES = (PAPER_SOURCE, VOICE_SOURCE, HANDWRITTEN_SOURCE)
+DOCUMENT_SOURCE = "documents"
+ALL_SOURCES = (PAPER_SOURCE, VOICE_SOURCE, HANDWRITTEN_SOURCE, DOCUMENT_SOURCE)
 
 
 class ToolError(Exception):
@@ -164,6 +170,25 @@ class CitationRegistry:
             ),
         )
 
+    def register_document_chunk(
+        self, document: LibraryDocument, chunk: DocumentChunk
+    ) -> int:
+        return self._add(
+            chunk.chunk_id,
+            lambda index: ChatCitation(
+                index=index,
+                source_type=CitationSourceType.document,
+                source_id=document.id,
+                chunk_id=chunk.chunk_id,
+                title=document.title,
+                page=chunk.page,
+                section=chunk.section,
+                year=None,
+                snippet=snippet_from(chunk.text),
+                similarity=None,
+            ),
+        )
+
     def register_note(self, note: Note, snippet: str) -> int:
         return self._add(
             note.id,
@@ -197,6 +222,33 @@ class CitationRegistry:
                 snippet=hit.snippet or hit.title,
                 similarity=None,
                 url=hit.url,
+            ),
+        )
+
+    def register_inventory(
+        self,
+        *,
+        key: uuid.UUID,
+        source_type: CitationSourceType,
+        source_id: uuid.UUID,
+        title: str,
+        snippet: str,
+        year: int | None = None,
+    ) -> int:
+        """Register a list_* inventory line so the evidence gate can see it."""
+        return self._add(
+            key,
+            lambda index: ChatCitation(
+                index=index,
+                source_type=source_type,
+                source_id=source_id,
+                chunk_id=key,
+                title=title,
+                page=None,
+                section="inventory",
+                year=year,
+                snippet=snippet_from(snippet),
+                similarity=None,
             ),
         )
 
@@ -271,6 +323,7 @@ class ToolContext:
     include_papers: bool = True
     include_voice_notes: bool = True
     include_handwritten_notes: bool = True
+    include_documents: bool = True
     top_k: int | None = None
     compare: CompareService | None = None
     extraction: ExtractionService | None = None
@@ -278,6 +331,15 @@ class ToolContext:
     web_search: WebSearcher | None = None
     compare_budget: int = COMPARE_CALLS_PER_TURN
     todo_store: object | None = None
+    # Set by the loop to a turn-scoped ToolResultStore. `object` rather than the
+    # real type because tools.py is imported by the store's own dependencies.
+    result_store: object | None = None
+    # An EventSink, set only for tools the loop streams progress for.
+    progress: object | None = None
+    # The turn's assembled handler table. Set by the loop so a call can reach
+    # an MCP tool that only exists while its server is connected; falls back to
+    # TOOL_HANDLERS when nobody set it (a subagent, or a unit test).
+    handlers: dict | None = None
     depth: int = 0
     subagent_budget: int = 1
 
@@ -289,6 +351,8 @@ class ToolContext:
             allowed.append(VOICE_SOURCE)
         if self.include_handwritten_notes:
             allowed.append(HANDWRITTEN_SOURCE)
+        if self.include_documents:
+            allowed.append(DOCUMENT_SOURCE)
         return allowed
 
 
@@ -304,14 +368,21 @@ def _as_uuid(value: object, *, field_name: str) -> uuid.UUID:
 
 
 def _as_int(
-    value: object, *, field_name: str, default: int | None = None
+    value: object,
+    *,
+    field_name: str,
+    default: int | None = None,
+    minimum: int | None = None,
 ) -> int | None:
     if value is None:
         return default
     try:
-        return int(value)
+        parsed = int(value)
     except (TypeError, ValueError) as exc:
         raise ToolError(f"{field_name} must be a whole number, got {value!r}") from exc
+    if minimum is not None and parsed < minimum:
+        raise ToolError(f"{field_name} must be at least {minimum}, got {parsed}")
+    return parsed
 
 
 def _location(page: int | None, section: str | None, year: int | None) -> str:
@@ -331,6 +402,8 @@ def _hit_label(hit: RetrievalHit) -> str:
     label = SOURCE_LABELS.get(hit.source_type, hit.source_type)
     if hit.source_type == "paper":
         return label
+    if hit.source_type == "document":
+        return f"{label} — {DOCUMENT_DISCLAIMER}"
     return f"{label} — {NOTE_DISCLAIMER}"
 
 
@@ -378,13 +451,14 @@ async def search_library(ctx: ToolContext, **kwargs: object) -> ToolResult:
         include_papers=PAPER_SOURCE in sources,
         include_voice_notes=VOICE_SOURCE in sources,
         include_handwritten_notes=HANDWRITTEN_SOURCE in sources,
+        include_documents=DOCUMENT_SOURCE in sources,
         top_k=top_k,
     )
     if not hits:
         return ToolResult(
             content=(
                 f'No chunks matched "{query}" in the enabled sources ({", ".join(sources)}). '
-                "Try different wording, or use list_papers to see what the library holds."
+                "Try different wording, or use list_papers / list_documents to see what the library holds."
             ),
             summary=f'Searched "{query}" — no matches',
         )
@@ -411,20 +485,99 @@ async def search_library(ctx: ToolContext, **kwargs: object) -> ToolResult:
     )
 
 
+INVENTORY_NAMESPACE = uuid.UUID("9c1a8f2e-4b6d-4f11-8a7c-2e9d0b4f6a11")
+PAPER_LINE_CHARS = 400
+PAPER_BLURB_CHARS = 220
+
+
+def inventory_catalog_id(kind: str) -> uuid.UUID:
+    return uuid.uuid5(INVENTORY_NAMESPACE, kind)
+
+
+def _clip_text(text: str, limit: int) -> str:
+    cleaned = " ".join((text or "").split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _paper_blurb(row: LibraryPaperRow) -> str:
+    if row.summary:
+        return _clip_text(row.summary, PAPER_BLURB_CHARS)
+    if row.abstract:
+        return _clip_text(row.abstract, PAPER_BLURB_CHARS)
+    digest = row.digest or {}
+    parts = [
+        str(digest.get(key) or "").strip()
+        for key in ("problem", "method", "key_results")
+        if str(digest.get(key) or "").strip()
+    ]
+    return _clip_text(" ".join(parts), PAPER_BLURB_CHARS)
+
+
+def _number_inventory_line(
+    ctx: ToolContext,
+    *,
+    key: uuid.UUID,
+    source_type: CitationSourceType,
+    source_id: uuid.UUID,
+    title: str,
+    snippet: str,
+    year: int | None = None,
+) -> str:
+    index = ctx.registry.register_inventory(
+        key=key,
+        source_type=source_type,
+        source_id=source_id,
+        title=title,
+        snippet=snippet,
+        year=year,
+    )
+    return f"[{index}] {snippet}"
+
+
 def _paper_line(row: LibraryPaperRow) -> str:
     year = row.year if row.year is not None else "year unknown"
     authors = ", ".join(row.authors[:3]) if row.authors else "authors unknown"
-    return (
+    line = (
         f"- id={row.id} | {row.title} | {year} | {authors} "
         f"| status={row.processing_status} | {row.chunk_count} chunk(s)"
     )
+    blurb = _paper_blurb(row)
+    if blurb:
+        line = f"{line}\n  {blurb}"
+    digest = row.digest or {}
+    extras = []
+    for key, label in (
+        ("method", "method"),
+        ("key_results", "results"),
+        ("limitations", "limitations"),
+    ):
+        value = str(digest.get(key) or "").strip()
+        if value:
+            extras.append(f"{label}: {value}")
+    if extras:
+        line = f"{line}\n  {_clip_text('; '.join(extras), PAPER_BLURB_CHARS)}"
+    if len(line) > PAPER_LINE_CHARS:
+        line = line[: PAPER_LINE_CHARS - 3].rstrip() + "..."
+    return line
 
 
 async def list_papers(ctx: ToolContext, **_: object) -> ToolResult:
     rows = await list_library_papers(ctx.session)
     if not rows:
+        content = "The paper library is empty. No paper can support any claim."
+        empty_id = inventory_catalog_id("papers-empty")
+        numbered = _number_inventory_line(
+            ctx,
+            key=empty_id,
+            source_type=CitationSourceType.paper,
+            source_id=empty_id,
+            title="Paper library",
+            snippet=content,
+        )
         return ToolResult(
-            content="The paper library is empty. No paper can support any claim.",
+            content=numbered,
             summary="Listed papers — library is empty",
         )
 
@@ -439,10 +592,158 @@ async def list_papers(ctx: ToolContext, **_: object) -> ToolResult:
         f"Library: {len(rows)} paper(s), {ready} ready to search. "
         f"Publication years: {year_part}."
     )
-    lines = "\n".join(_paper_line(row) for row in rows)
+    header_id = inventory_catalog_id("papers-header")
+    blocks = [
+        _number_inventory_line(
+            ctx,
+            key=header_id,
+            source_type=CitationSourceType.paper,
+            source_id=header_id,
+            title="Paper library",
+            snippet=header,
+        )
+    ]
+    for row in rows:
+        blocks.append(
+            _number_inventory_line(
+                ctx,
+                key=row.id,
+                source_type=CitationSourceType.paper,
+                source_id=row.id,
+                title=row.title,
+                snippet=_paper_line(row),
+                year=row.year,
+            )
+        )
     return ToolResult(
-        content=f"{header}\n\n{lines}",
+        content="\n\n".join(blocks),
         summary=f"Listed {len(rows)} paper(s) in the library",
+    )
+
+
+def _document_line(row: LibraryDocumentRow) -> str:
+    return (
+        f"- id={row.id} | {row.title} | file={row.original_filename} "
+        f"| status={row.processing_status} | {row.chunk_count} chunk(s)"
+    )
+
+
+async def list_documents(ctx: ToolContext, **_: object) -> ToolResult:
+    if not ctx.include_documents:
+        raise ToolError("The researcher disabled documents for this conversation")
+    rows = await list_library_documents(ctx.session)
+    if not rows:
+        content = "The document library is empty."
+        empty_id = inventory_catalog_id("documents-empty")
+        numbered = _number_inventory_line(
+            ctx,
+            key=empty_id,
+            source_type=CitationSourceType.document,
+            source_id=empty_id,
+            title="Document library",
+            snippet=content,
+        )
+        return ToolResult(
+            content=numbered,
+            summary="Listed documents — library is empty",
+        )
+    ready = sum(1 for row in rows if row.processing_status == "ready")
+    header = (
+        f"Library: {len(rows)} document(s), {ready} ready to search. "
+        "These are generic files, not papers or personal notes."
+    )
+    header_id = inventory_catalog_id("documents-header")
+    blocks = [
+        _number_inventory_line(
+            ctx,
+            key=header_id,
+            source_type=CitationSourceType.document,
+            source_id=header_id,
+            title="Document library",
+            snippet=header,
+        )
+    ]
+    for row in rows:
+        blocks.append(
+            _number_inventory_line(
+                ctx,
+                key=row.id,
+                source_type=CitationSourceType.document,
+                source_id=row.id,
+                title=row.title,
+                snippet=_document_line(row),
+            )
+        )
+    return ToolResult(
+        content="\n\n".join(blocks),
+        summary=f"Listed {len(rows)} document(s) in the library",
+    )
+
+
+async def read_document(ctx: ToolContext, **kwargs: object) -> ToolResult:
+    if not ctx.include_documents:
+        raise ToolError("The researcher disabled documents for this conversation")
+
+    document_id = _as_uuid(kwargs.get("document_id"), field_name="document_id")
+    start_index = _as_int(
+        kwargs.get("start_index"), field_name="start_index", default=0
+    )
+    limit = _as_int(kwargs.get("limit"), field_name="limit")
+
+    document = await ctx.session.get(LibraryDocument, document_id)
+    if document is None:
+        raise ToolError(
+            f"No document with id {document_id}. Use list_documents to get valid ids."
+        )
+
+    page = await read_document_chunks(
+        ctx.session,
+        document_id,
+        start_index=start_index or 0,
+        limit=limit,
+    )
+    if page.total == 0:
+        return ToolResult(
+            content=(
+                f'"{document.title}" has no parsed text '
+                f"(processing status: {document.processing_status})."
+            ),
+            summary=f'Read "{document.title}" — no parsed text',
+        )
+    if not page.chunks:
+        return ToolResult(
+            content=(
+                f'"{document.title}" has {page.total} chunk(s), so start_index '
+                f"{page.start_index} is past the end."
+            ),
+            summary=f'Read "{document.title}" — start_index out of range',
+        )
+
+    blocks: list[str] = []
+    for chunk in page.chunks:
+        index = ctx.registry.register_document_chunk(document, chunk)
+        header = (
+            f"[{index}] Document — {document.title}"
+            f"{_location(chunk.page, chunk.section, None)} "
+            f"(chunk {chunk.chunk_index})"
+        )
+        blocks.append(
+            f"{header}\n{snippet_from(chunk.text, max_chars=READ_EVIDENCE_CHARS)}"
+        )
+
+    last = page.chunks[-1].chunk_index
+    more = (
+        f"\n\nChunks {page.chunks[0].chunk_index}-{last} of {page.total}. "
+        f"Call read_document again with start_index={last + 1} to continue."
+        if last + 1 < page.total
+        else (
+            f"\n\nChunks {page.chunks[0].chunk_index}-{last} of {page.total}. "
+            "End of document."
+        )
+    )
+    return ToolResult(
+        content="\n\n".join(blocks) + more,
+        summary=f'Read "{document.title}" chunks {page.chunks[0].chunk_index}-{last}',
     )
 
 
@@ -476,8 +777,18 @@ async def list_notes(ctx: ToolContext, **kwargs: object) -> ToolResult:
 
     rows = await list_library_notes(ctx.session, source_types=enabled)
     if not rows:
+        content = "No notes of that type exist."
+        empty_id = inventory_catalog_id(f"notes-empty:{requested}")
+        numbered = _number_inventory_line(
+            ctx,
+            key=empty_id,
+            source_type=CitationSourceType.voice,
+            source_id=empty_id,
+            title="Note library",
+            snippet=content,
+        )
         return ToolResult(
-            content="No notes of that type exist.",
+            content=numbered,
             summary="Listed notes — none found",
         )
 
@@ -485,9 +796,35 @@ async def list_notes(ctx: ToolContext, **kwargs: object) -> ToolResult:
         f"{len(rows)} note(s). These are the researcher's own notes, "
         "not published paper claims."
     )
-    lines = "\n".join(_note_line(row) for row in rows)
+    header_id = inventory_catalog_id(f"notes-header:{requested}")
+    blocks = [
+        _number_inventory_line(
+            ctx,
+            key=header_id,
+            source_type=CitationSourceType.voice,
+            source_id=header_id,
+            title="Note library",
+            snippet=header,
+        )
+    ]
+    for row in rows:
+        source_type = (
+            CitationSourceType.handwritten
+            if row.source_type == NoteSourceType.handwritten.value
+            else CitationSourceType.voice
+        )
+        blocks.append(
+            _number_inventory_line(
+                ctx,
+                key=row.id,
+                source_type=source_type,
+                source_id=row.id,
+                title=row.title,
+                snippet=_note_line(row),
+            )
+        )
     return ToolResult(
-        content=f"{header}\n\n{lines}",
+        content="\n\n".join(blocks),
         summary=f"Listed {len(rows)} note(s)",
     )
 
@@ -705,6 +1042,33 @@ def _compare_evidence_lines(
     return lines
 
 
+def _progress_reporter(ctx: ToolContext):
+    """Turn workflow progress into events the loop can stream, or drop it.
+
+    A comparison is four model calls; without this the UI shows one tool call
+    and nothing else for the better part of a minute. `ctx.progress` is only
+    set for tools the loop is willing to stream (see PROGRESS_TOOLS), so this
+    returns None everywhere else and the workflow skips reporting entirely.
+    """
+    sink = ctx.progress
+    if sink is None:
+        return None
+
+    def report(progress: object) -> None:
+        from schemas import ChatEventType
+        from services.agent.events import AgentEvent
+
+        data = progress.as_event()  # type: ignore[attr-defined]
+        sink.emit(
+            AgentEvent(
+                type=ChatEventType.progress,
+                data={**data, "tool": "compare_papers"},
+            )
+        )
+
+    return report
+
+
 async def compare_papers(ctx: ToolContext, **kwargs: object) -> ToolResult:
     if ctx.compare is None:
         raise ToolError("Comparison is not available in this conversation")
@@ -726,7 +1090,9 @@ async def compare_papers(ctx: ToolContext, **kwargs: object) -> ToolResult:
     ctx.compare_budget -= 1
     request = CompareRequest(paper_ids=paper_ids, dimensions=dimensions)
     try:
-        response = await ctx.compare.compare(ctx.session, request)
+        response = await ctx.compare.compare(
+            ctx.session, request, on_progress=_progress_reporter(ctx)
+        )
     except CompareValidationError as exc:
         raise ToolError(str(exc)) from exc
     except CompareError as exc:
@@ -869,6 +1235,69 @@ async def spawn_subagent(ctx: ToolContext, **kwargs: object) -> ToolResult:
     )
 
 
+async def fetch_tool_result(ctx: ToolContext, **kwargs: object) -> ToolResult:
+    """Read more of a result this turn already truncated.
+
+    The alternative is running the same tool again for a payload the harness
+    already has, which spends a tool slot to learn nothing new.
+    """
+    from services.agent.tool_results import DEFAULT_FETCH_CHARS, ToolResultStore
+
+    store = ctx.result_store
+    if not isinstance(store, ToolResultStore):
+        raise ToolError("fetch_tool_result is not available in this context")
+
+    call_id = str(kwargs.get("call_id") or "").strip()
+    if not call_id:
+        raise ToolError("call_id is required — copy it from the truncation note")
+
+    offset = _as_int(kwargs.get("offset"), default=0, minimum=0, field_name="offset")
+    limit = _as_int(
+        kwargs.get("limit"),
+        default=DEFAULT_FETCH_CHARS,
+        minimum=1,
+        field_name="limit",
+    )
+
+    window = store.window(call_id, offset=offset, limit=limit)
+    if window is None:
+        known = store.ids()
+        hint = (
+            f" Ids from this turn: {', '.join(known)}."
+            if known
+            else " Nothing was truncated in this turn."
+        )
+        raise ToolError(f"No stored result for call_id {call_id!r}.{hint}")
+
+    entry, slice_text, next_offset = window
+    if not slice_text:
+        return ToolResult(
+            content=(
+                f"offset {offset} is past the end of the {entry.tool} result "
+                f"({entry.total_chars} characters)."
+            ),
+            summary=f"fetch_tool_result: offset past the end of {entry.tool}",
+        )
+
+    shown_to = offset + len(slice_text)
+    tail = (
+        f'\n\n[more remains. fetch_tool_result(call_id="{call_id}", '
+        f"offset={next_offset}) continues.]"
+        if next_offset >= 0
+        else "\n\n[end of the stored result]"
+    )
+    return ToolResult(
+        content=(
+            f"{entry.tool} result, characters {offset}–{shown_to} of "
+            f"{entry.total_chars}:\n\n{slice_text}{tail}"
+        ),
+        summary=(
+            f"Fetched {entry.tool} characters {offset}–{shown_to} "
+            f"of {entry.total_chars}"
+        ),
+    )
+
+
 async def list_skills_tool(ctx: ToolContext, **_: object) -> ToolResult:
     from services.agent.skills import list_skill_summaries
 
@@ -944,15 +1373,25 @@ async def memory_search(ctx: ToolContext, **kwargs: object) -> ToolResult:
 
 
 async def memory_write(ctx: ToolContext, **kwargs: object) -> ToolResult:
-    from services.agent.memory import MemoryError, memory_as_dict, upsert_memory
+    from services.agent.memory import (
+        TOOL_SOURCE_PREFIX,
+        MemoryError,
+        memory_as_dict,
+        upsert_memory,
+    )
 
+    # Namespaced so a model-supplied note can never look like the extractor's
+    # own marker: consolidation is allowed to rewrite extracted records, and
+    # must not be handed these.
+    note = str(kwargs.get("source_turn") or "").strip()
     try:
         row = await upsert_memory(
             ctx.session,
             key=kwargs.get("key"),
             content=kwargs.get("content"),
             category=kwargs.get("category"),
-            source_turn=kwargs.get("source_turn"),
+            source_turn=f"{TOOL_SOURCE_PREFIX}{note}" if note else None,
+            embeddings=ctx.embeddings,
         )
     except MemoryError as exc:
         raise ToolError(str(exc)) from exc
@@ -1142,13 +1581,16 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "web_search": web_search,
     "list_papers": list_papers,
     "list_notes": list_notes,
+    "list_documents": list_documents,
     "read_paper": read_paper,
     "read_note": read_note,
+    "read_document": read_document,
     "compare_papers": compare_papers,
     "present_workspace": present_workspace,
     "preview_note_extraction": preview_note_extraction,
     "todo_write": todo_write,
     "spawn_subagent": spawn_subagent,
+    "fetch_tool_result": fetch_tool_result,
     "list_skills": list_skills_tool,
     "load_skill": load_skill_tool,
     "memory_search": memory_search,
@@ -1165,8 +1607,10 @@ SUBAGENT_TOOL_NAMES = frozenset(
         "search_library",
         "list_papers",
         "list_notes",
+        "list_documents",
         "read_paper",
         "read_note",
+        "read_document",
         "list_skills",
         "load_skill",
         "memory_search",
@@ -1177,9 +1621,41 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "fetch_tool_result",
+            "description": (
+                "Read more of an earlier tool result that was truncated. When a "
+                "result ends with a truncation note, pass its call_id here "
+                "instead of running the same tool again."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "call_id": {
+                        "type": "string",
+                        "description": "The call_id printed in the truncation note.",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": (
+                            "Character to start from. The truncation note says "
+                            "which offset continues where you left off."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "How many characters to return (max 8000).",
+                    },
+                },
+                "required": ["call_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_library",
             "description": (
-                "Semantic search over the researcher's papers and notes. "
+                "Semantic search over the researcher's papers, notes, and documents. "
                 "Returns numbered chunks you may cite as [n]."
             ),
             "parameters": {
@@ -1233,8 +1709,11 @@ TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "list_papers",
             "description": (
-                "List every paper in the library with id, year, and chunk count. "
-                "Use this first to judge what the library can actually support."
+                "List every paper in the library with id, year, stored summary, "
+                "and chunk count. Use it for a library overview or inventory, "
+                "or when you need an id before reading. Do not call read_paper "
+                "for an overview when summaries are present. Do not call it as "
+                "a warm-up."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
@@ -1244,7 +1723,9 @@ TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "list_notes",
             "description": (
-                "List the researcher's own notes with id, title, and review status."
+                "List the researcher's own notes with id, title, and review status. "
+                "Use it when the message needs the note inventory, a library "
+                "overview, or a note id, not as a warm-up."
             ),
             "parameters": {
                 "type": "object",
@@ -1261,10 +1742,25 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "list_documents",
+            "description": (
+                "List generic library documents (markdown, csv, docx, and PDFs "
+                "filed as documents) with id and chunk count. Use it when the "
+                "message needs that inventory, a library overview, or a "
+                "document id, not as a warm-up."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_paper",
             "description": (
                 "Read a paper's text in source order, starting at a chunk index. "
-                "Use it when search snippets are too shallow to answer."
+                "Use it when search snippets or the stored list_papers summary "
+                "are too shallow to answer. Do not use it just to overview the "
+                "library."
             ),
             "parameters": {
                 "type": "object",
@@ -1303,6 +1799,34 @@ TOOL_SCHEMAS: list[dict] = [
                     }
                 },
                 "required": ["note_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_document",
+            "description": (
+                "Read a generic library document in source order. Documents are "
+                "neither published papers nor the researcher's notes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "string",
+                        "description": "Document id from list_documents or a search result.",
+                    },
+                    "start_index": {
+                        "type": "integer",
+                        "description": "First chunk index to read. Defaults to 0.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "How many chunks to read (1-6).",
+                    },
+                },
+                "required": ["document_id"],
             },
         },
     },

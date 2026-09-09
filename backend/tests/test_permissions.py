@@ -1,5 +1,6 @@
 from services.agent.permissions import (
     DEFAULT_POLICY,
+    WRITE_TOOLS,
     Decision,
     PermissionPolicy,
     PermissionRule,
@@ -7,15 +8,22 @@ from services.agent.permissions import (
 from services.agent.tools import TOOL_HANDLERS
 
 
-def test_every_shipped_tool_is_allowed():
+def test_every_shipped_tool_has_a_rule():
     """A new tool has to be written into the policy, not just registered.
 
     The rules are listed by hand precisely so this fails when someone adds a
     handler without deciding whether it may run.
     """
-    assert sorted(TOOL_HANDLERS) == DEFAULT_POLICY.allowed_tools()
+    assert sorted(TOOL_HANDLERS) == DEFAULT_POLICY.known_tools()
     for name in TOOL_HANDLERS:
-        assert DEFAULT_POLICY.check(name).decision is Decision.allow
+        assert DEFAULT_POLICY.check(name).decision in {Decision.allow, Decision.ask}
+
+
+def test_write_tools_ask_and_reads_allow():
+    for name in WRITE_TOOLS:
+        assert DEFAULT_POLICY.check(name).decision is Decision.ask
+    assert DEFAULT_POLICY.check("search_library").allowed
+    assert DEFAULT_POLICY.check("compare_papers").allowed
 
 
 def test_the_comparison_tool_is_allowed_despite_saving_a_row():

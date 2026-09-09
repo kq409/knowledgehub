@@ -170,3 +170,14 @@ def test_message_chars_counts_tool_calls():
     assert message_chars(messages) == len(
         json.dumps(messages[0]["tool_calls"], ensure_ascii=False)
     )
+
+
+def test_message_chars_counts_reasoning_content():
+    messages = [
+        {
+            "role": "assistant",
+            "content": "ok",
+            "reasoning_content": "thinking",
+        }
+    ]
+    assert message_chars(messages) == len("ok") + len("thinking")

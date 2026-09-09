@@ -52,6 +52,7 @@ SOURCE_LABELS = {
     "paper": "Paper",
     "voice": "Voice note",
     "handwritten": "Handwritten note",
+    "document": "Document",
     "web": "Web",
 }
 

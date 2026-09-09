@@ -3,7 +3,16 @@ import uuid
 from datetime import UTC, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Computed, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Computed,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -133,6 +142,12 @@ class PaperStatus(str, enum.Enum):
     failed = "failed"
 
 
+class DigestStatus(str, enum.Enum):
+    pending = "pending"
+    ready = "ready"
+    failed = "failed"
+
+
 class Paper(Base):
     __tablename__ = "papers"
 
@@ -143,6 +158,11 @@ class Paper(Base):
     authors: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    digest: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    digest_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DigestStatus.pending.value
+    )
     source: Mapped[str] = mapped_column(String(64), nullable=False, default="upload")
     tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     original_filename: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -277,6 +297,119 @@ class PaperComparison(Base):
     )
 
 
+class LibraryDocument(Base):
+    """A generic library file (markdown, csv, docx, or a PDF filed as a document)."""
+
+    __tablename__ = "documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    original_file: Mapped[str] = mapped_column(String(1024), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processing_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=ProcessingStatus.pending.value
+    )
+    processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    chunks: Mapped[list["LibraryDocumentChunk"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+
+
+class LibraryDocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    section: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(EMBEDDING_DIM), nullable=True
+    )
+    extra: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    tsv: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('simple', coalesce(text, ''))", persisted=True),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    document: Mapped[LibraryDocument] = relationship(back_populates="chunks")
+
+
+class Conversation(Base):
+    """A persisted chat thread the researcher can reopen from history."""
+
+    __tablename__ = "conversations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False, default="New chat")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    turns: Mapped[list["ConversationTurn"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ConversationTurn.turn_index",
+    )
+
+
+class ConversationTurn(Base):
+    __tablename__ = "conversation_turns"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    conversation: Mapped[Conversation] = relationship(back_populates="turns")
+
+
 class AgentMemory(Base):
     """Cross-session preferences and hypotheses the chat agent can recall."""
 
@@ -289,6 +422,18 @@ class AgentMemory(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
     category: Mapped[str] = mapped_column(String(32), nullable=False, default="other")
     source_turn: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Recall used to be substring counting, which misses "I care about
+    # retrieval" for a question about "search quality". Nullable because the
+    # embedding service can be down when a memory is written, and a memory
+    # without a vector must still be stored and still be findable by keyword.
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(EMBEDDING_DIM), nullable=True
+    )
+    # Lets a record that nothing has needed for months sink in the ranking
+    # instead of holding a slot in the recall window forever.
+    last_recalled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -298,4 +443,47 @@ class AgentMemory(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
+    )
+
+
+class WorkflowStep(Base):
+    """One journalled unit of work inside a deterministic workflow.
+
+    A four-paper comparison is four model calls plus a synthesis. Without a
+    journal, a failure on the fourth throws away the first three and the
+    researcher pays for them again. With one, a retry under the same `run_id`
+    replays the finished steps from here and only recomputes what is missing.
+
+    `step_key` is a hash of what the step *means* (kind, label, prompt,
+    schema), never its position or completion order -- parallel steps finish in
+    an unpredictable order, so an index-based key would replay the wrong result
+    into the wrong slot.
+    """
+
+    __tablename__ = "workflow_steps"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    run_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    step_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(48), nullable=False)
+    label: Mapped[str] = mapped_column(String(240), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="done")
+    result: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "step_key", name="uq_workflow_steps_run_key"),
     )

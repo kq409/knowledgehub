@@ -43,6 +43,7 @@ from schemas import (
 from schemas import (
     NoteSourceType as NoteSourceTypeSchema,
 )
+from services.agent.notifications import FAILED, notify_ingested
 from services.connect import (
     ConnectError,
     ConnectNotFoundError,
@@ -342,6 +343,7 @@ async def process_note(note_id: uuid.UUID, app: FastAPI) -> None:
                         return
                     await apply_pdf_parse_result(session, note, parsed, embeddings)
             print(f"✅ Note processed: {note_id}", flush=True)
+            notify_ingested("handwritten note", fallback_title)
             schedule_connect(app, note_id)
             return
 
@@ -353,9 +355,11 @@ async def process_note(note_id: uuid.UUID, app: FastAPI) -> None:
             embeddings = await asyncio.to_thread(pipeline.embed_chunks, chunks)
             await apply_text_chunks(session, note, chunks, embeddings)
         print(f"✅ Note processed: {note_id}", flush=True)
+        notify_ingested("voice note", fallback_title)
         schedule_connect(app, note_id)
     except Exception as exc:
         print(f"❌ Note processing failed: {exc}", flush=True)
+        notify_ingested("note", fallback_title, outcome=FAILED, detail=str(exc)[:200])
         async with db.SessionLocal() as session:
             await mark_note_status(
                 session, note_id, ProcessingStatus.failed, error=str(exc)[:2000]

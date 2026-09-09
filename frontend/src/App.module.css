@@ -19,24 +19,7 @@
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  gap: var(--space-3);
-}
-
-.libraryPane,
-.chatPane {
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.libraryPane {
-  flex: 1;
-}
-
-.chatPane {
-  flex: 1.15;
+  height: 100%;
 }
 
 .workspace {
@@ -56,8 +39,7 @@
     grid-template-rows: none;
   }
 
-  .libraryPane,
-  .chatPane,
+  .sidebar,
   .workspace {
     min-height: 420px;
   }

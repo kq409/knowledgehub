@@ -128,13 +128,17 @@ export function RelatedPapersPanel({
     Date.now() - new Date(updatedAt).getTime() < 90_000;
 
   const titleById = new Map(papers.map((paper) => [paper.id, paper.title]));
-  const sourceById = new Map(paperLinks.map((link) => [link.paper_id, link.source]));
+  const sourceById = new Map(
+    paperLinks.map((link) => [link.paper_id, link.source])
+  );
 
   return (
     <div className={styles.panel}>
       <label className={styles.fieldLabel} id="related-papers-label">
         Related papers
-        <span className={styles.hint}>local library · AI links can be unchecked</span>
+        <span className={styles.hint}>
+          local library · AI links can be unchecked
+        </span>
       </label>
 
       <div className={styles.modeRow} role="group" aria-label="Reason mode">
@@ -169,7 +173,9 @@ export function RelatedPapersPanel({
       </button>
 
       {!noteId && (
-        <p className={styles.hint}>Save the note first to search the paper library.</p>
+        <p className={styles.hint}>
+          Save the note first to search the paper library.
+        </p>
       )}
       {noteId && !isReady && (
         <p className={styles.hint}>Wait until the note finishes processing.</p>
@@ -189,19 +195,24 @@ export function RelatedPapersPanel({
       )}
 
       {result && result.papers.length === 0 && !isRunning && (
-        <p className={styles.empty}>No related papers above the similarity threshold.</p>
+        <p className={styles.empty}>
+          No related papers above the similarity threshold.
+        </p>
       )}
 
       {result && result.papers.length > 0 && (
         <ol className={styles.list} aria-labelledby="related-papers-label">
           {result.papers.map((paper) => {
             const linked = paper.linked;
-            const source = paper.source ?? sourceById.get(paper.paper_id) ?? null;
+            const source =
+              paper.source ?? sourceById.get(paper.paper_id) ?? null;
             return (
               <li key={paper.paper_id} className={styles.item}>
                 <div className={styles.itemHeader}>
                   <span className={styles.itemTitle}>
-                    {paper.title || titleById.get(paper.paper_id) || 'Untitled paper'}
+                    {paper.title ||
+                      titleById.get(paper.paper_id) ||
+                      'Untitled paper'}
                   </span>
                   {linked && source === 'ai' && (
                     <span className={styles.badge}>AI</span>
@@ -217,9 +228,11 @@ export function RelatedPapersPanel({
                   {paper.section ? ` · ${paper.section}` : ''}
                 </p>
                 <p className={styles.reason}>{paper.reason}</p>
-                {paper.reason_mode === 'llm' && paper.snippet && paper.reason !== paper.snippet && (
-                  <p className={styles.snippet}>{paper.snippet}</p>
-                )}
+                {paper.reason_mode === 'llm' &&
+                  paper.snippet &&
+                  paper.reason !== paper.snippet && (
+                    <p className={styles.snippet}>{paper.snippet}</p>
+                  )}
               </li>
             );
           })}

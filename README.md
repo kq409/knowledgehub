@@ -230,6 +230,17 @@ The Chat subagent tools (`search_library`, `list_papers`, `list_notes`, `read_pa
 
 Write tools (link/unlink, memory_write, compare) are not exposed.
 
+The chat agent can also *consume* external MCP tools. Copy
+`backend/mcp_servers.example.json` to `backend/mcp_servers.json` (or set
+`MCP_SERVERS`) with an `allow` list of remote tool names. Names show up as
+`mcp__{server}__{tool}`. A server's own `readOnlyHint` is not authorisation;
+anything not on `allow` needs in-chat approval.
+
+Write tools in Chat (`memory_write`, `memory_delete`, `link_note`,
+`unlink_note`, `connect_note`) pause for a researcher click unless
+`ASK_APPROVAL_MODE=off`. The wait is process-local: the replica that started
+the turn must receive `POST /api/chat/approve`.
+
 Hybrid lexical search uses stored `tsvector` columns. Optional FlashRank rerank: set `RERANK_ENABLED=true` (downloads a small ONNX model on first use). Ask/Chat traces always append JSONL under `data/traces/`; set `OPIK_API_KEY` to also send them to Comet Opik.
 
 ---

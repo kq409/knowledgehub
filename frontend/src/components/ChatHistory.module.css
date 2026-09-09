@@ -1,0 +1,111 @@
+.history {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+.newButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-on-accent);
+  background: var(--color-primary);
+  border: 1px solid var(--color-border);
+}
+
+.newButton:hover {
+  background: var(--color-primary-hover);
+}
+
+.newIcon,
+.deleteIcon {
+  width: 16px;
+  height: 16px;
+}
+
+.empty,
+.error {
+  margin: 0;
+  padding: 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.error {
+  color: var(--color-accent-red-fg);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.item {
+  display: flex;
+  align-items: stretch;
+  border-radius: var(--radius-md);
+}
+
+.item:hover {
+  background: var(--color-surface-muted);
+}
+
+.active {
+  background: var(--color-primary-light);
+}
+
+.select {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-md);
+}
+
+.delete:hover {
+  color: var(--color-accent-red-fg);
+  background: var(--color-surface-hover);
+}

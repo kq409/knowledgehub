@@ -103,6 +103,71 @@
   border: 1px solid var(--color-border);
 }
 
+.plusButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.plusButton:hover:not(:disabled) {
+  background: var(--color-primary-light);
+}
+
+.plusButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.plusIcon {
+  width: 16px;
+  height: 16px;
+}
+
+.hiddenInput {
+  display: none;
+}
+
+.chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding: 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-muted);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+}
+
+.chipRemove {
+  display: inline-flex;
+  color: var(--color-text-secondary);
+}
+
+.chipIcon {
+  width: 12px;
+  height: 12px;
+}
+
+.composerDragging {
+  outline: 2px dashed var(--color-primary);
+  outline-offset: 4px;
+}
+
 .micButton:hover:not(:disabled) {
   background: var(--color-primary-light);
 }
@@ -449,6 +514,59 @@
   margin: 0 0 var(--space-3);
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
+}
+
+.approvalList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+}
+
+.approvalCard {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-accent);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.approvalTitle {
+  margin: 0 0 var(--space-1);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.approvalReason {
+  margin: 0 0 var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.approvalActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.approvalAllow,
+.approvalDeny {
+  padding: 4px 12px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+}
+
+.approvalAllow {
+  border: 1px solid var(--color-border);
+  background: var(--color-primary);
+  color: var(--color-text-inverse, #fff);
+}
+
+.approvalDeny {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-primary);
 }
 
 .nestedTrace {

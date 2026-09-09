@@ -7,7 +7,8 @@ function summaryLine(run: EvalRun): string {
   if (!raw) {
     return run.suite;
   }
-  const rate = raw.pass_rate != null ? `${Math.round(raw.pass_rate * 100)}%` : '—';
+  const rate =
+    raw.pass_rate != null ? `${Math.round(raw.pass_rate * 100)}%` : '—';
   return `${run.suite} · ${rate} pass · ${raw.tasks ?? '—'} tasks`;
 }
 
@@ -57,11 +58,13 @@ export function EvalPanel() {
     setRunning(true);
     setError(null);
     try {
-      const response = await fetch('/api/eval/run?suite=ask', { method: 'POST' });
+      const response = await fetch('/api/eval/run?suite=ask', {
+        method: 'POST',
+      });
       if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as
-          | { detail?: string }
-          | null;
+        const body = (await response.json().catch(() => null)) as {
+          detail?: string;
+        } | null;
         throw new Error(body?.detail || `Eval failed (${response.status})`);
       }
       const manifest = (await response.json()) as EvalRun;
@@ -83,7 +86,11 @@ export function EvalPanel() {
           Latest Ask/Chat eval runs. Open a trial to read the transcript.
         </p>
         <div className={styles.actions}>
-          <button type="button" className={styles.button} onClick={() => void loadRuns()}>
+          <button
+            type="button"
+            className={styles.button}
+            onClick={() => void loadRuns()}
+          >
             Refresh
           </button>
           <button
@@ -97,7 +104,9 @@ export function EvalPanel() {
         </div>
       </div>
       {error ? <p className={styles.error}>{error}</p> : null}
-      {loading && runs.length === 0 ? <p className={styles.muted}>Loading…</p> : null}
+      {loading && runs.length === 0 ? (
+        <p className={styles.muted}>Loading…</p>
+      ) : null}
       <div className={styles.columns}>
         <ul className={styles.runList}>
           {runs.map((run) => (
@@ -148,7 +157,8 @@ export function EvalPanel() {
                   <ul>
                     {trial.grades.map((grade) => (
                       <li key={grade.name}>
-                        {grade.passed ? 'ok' : 'no'} {grade.name}: {grade.detail}
+                        {grade.passed ? 'ok' : 'no'} {grade.name}:{' '}
+                        {grade.detail}
                       </li>
                     ))}
                   </ul>
@@ -157,7 +167,9 @@ export function EvalPanel() {
                   ) : null}
                 </div>
               ) : (
-                <p className={styles.muted}>Select a task to read its transcript.</p>
+                <p className={styles.muted}>
+                  Select a task to read its transcript.
+                </p>
               )}
             </>
           ) : (

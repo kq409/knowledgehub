@@ -1,11 +1,12 @@
 """What the agent is allowed to run.
 
-Every tool call passes through a policy before it executes. Today every shipped
-tool is allowed and anything else is refused, so the policy is thin -- but it
-is the single place a write tool or an outside-the-library tool would have to
-argue its case.
+Every tool call passes through a policy before it executes. Read tools are
+allowed; write tools ask the researcher unless `ASK_APPROVAL_MODE=off`.
+Unknown tools are refused. Listing each tool by hand means a new write or an
+outside-the-library call has to be argued for here first.
 """
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 
@@ -34,18 +35,42 @@ class PermissionRule:
 
 
 UNKNOWN_TOOL_REASON = "is not a tool this agent has"
-APPROVAL_UNSUPPORTED_REASON = (
-    "needs the researcher's approval, which this chat channel cannot ask for yet"
+APPROVAL_REASON = "needs the researcher's approval before it can change the library"
+# Kept as an alias so older tests and messages that mention the unsupported
+# channel still match. The channel can ask now; the string stays honest when
+# no approver is wired up.
+APPROVAL_UNSUPPORTED_REASON = APPROVAL_REASON
+
+WRITE_TOOLS = frozenset(
+    {
+        "memory_write",
+        "memory_delete",
+        "link_note",
+        "unlink_note",
+        "connect_note",
+    }
 )
+
+_OFF_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def approval_enabled() -> bool:
+    """Whether write tools pause for a human.
+
+    Default on: a mutating call in an enterprise setting should not go
+    through because nobody was looking. Tests set `ASK_APPROVAL_MODE=off`
+    so the rest of the suite does not hang waiting for a click.
+    """
+    raw = (os.getenv("ASK_APPROVAL_MODE") or "on").strip().lower()
+    return raw not in _OFF_VALUES
 
 
 class PermissionPolicy:
     """Decides whether a named tool may run.
 
-    `ask` is a real decision a rule may return, but the chat endpoint streams a
-    single response and has no way to pause for a human. Until an approval
-    round-trip exists, the loop treats `ask` as a refusal with that reason, so
-    an unapprovable tool can never run by accident.
+    `ask` is a real decision. The hook chain either pauses for a human or,
+    when approval is switched off, treats it as allow so existing behaviour
+    is one env var away.
     """
 
     def __init__(self, rules: list[PermissionRule]) -> None:
@@ -72,6 +97,12 @@ class PermissionPolicy:
             if rule.decision is Decision.allow
         )
 
+    def known_tools(self) -> list[str]:
+        return sorted(self._rules)
+
+    def rules(self) -> list[PermissionRule]:
+        return list(self._rules.values())
+
 
 SHIPPED_RULES = [
     PermissionRule(tool="search_library", decision=Decision.allow),
@@ -80,8 +111,10 @@ SHIPPED_RULES = [
     PermissionRule(tool="web_search", decision=Decision.allow),
     PermissionRule(tool="list_papers", decision=Decision.allow),
     PermissionRule(tool="list_notes", decision=Decision.allow),
+    PermissionRule(tool="list_documents", decision=Decision.allow),
     PermissionRule(tool="read_paper", decision=Decision.allow),
     PermissionRule(tool="read_note", decision=Decision.allow),
+    PermissionRule(tool="read_document", decision=Decision.allow),
     # Saves a derived comparison row, but never touches a paper or a note. The
     # researcher can delete it from the Compare tab like any other comparison.
     PermissionRule(tool="compare_papers", decision=Decision.allow),
@@ -91,14 +124,17 @@ SHIPPED_RULES = [
     PermissionRule(tool="preview_note_extraction", decision=Decision.allow),
     PermissionRule(tool="todo_write", decision=Decision.allow),
     PermissionRule(tool="spawn_subagent", decision=Decision.allow),
+    # Reads back a result this same turn already produced and truncated. It
+    # cannot reach anything the turn has not already been allowed to see.
+    PermissionRule(tool="fetch_tool_result", decision=Decision.allow),
     PermissionRule(tool="list_skills", decision=Decision.allow),
     PermissionRule(tool="load_skill", decision=Decision.allow),
     PermissionRule(tool="memory_search", decision=Decision.allow),
-    PermissionRule(tool="memory_write", decision=Decision.allow),
-    PermissionRule(tool="memory_delete", decision=Decision.allow),
-    PermissionRule(tool="link_note", decision=Decision.allow),
-    PermissionRule(tool="unlink_note", decision=Decision.allow),
-    PermissionRule(tool="connect_note", decision=Decision.allow),
+    PermissionRule(tool="memory_write", decision=Decision.ask, reason=APPROVAL_REASON),
+    PermissionRule(tool="memory_delete", decision=Decision.ask, reason=APPROVAL_REASON),
+    PermissionRule(tool="link_note", decision=Decision.ask, reason=APPROVAL_REASON),
+    PermissionRule(tool="unlink_note", decision=Decision.ask, reason=APPROVAL_REASON),
+    PermissionRule(tool="connect_note", decision=Decision.ask, reason=APPROVAL_REASON),
 ]
 
 

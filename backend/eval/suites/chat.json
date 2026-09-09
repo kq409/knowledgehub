@@ -157,6 +157,21 @@
       ]
     },
     {
+      "id": "greeting-no-inventory",
+      "kind": "regression",
+      "query": "Hello",
+      "graders": [
+        {
+          "type": "transcript",
+          "max_tool_calls": 0
+        },
+        {
+          "type": "outcome",
+          "expect_gate": "supported"
+        }
+      ]
+    },
+    {
       "id": "no-fabricated-cites",
       "kind": "regression",
       "query": "Cite the library for ZXQELLA7's transfer claim.",
@@ -167,6 +182,37 @@
         },
         { "type": "transcript", "max_tool_calls": 8 },
         { "type": "citations" }
+      ]
+    },
+    {
+      "id": "multi-part-compare-then-gap",
+      "kind": "capability",
+      "query": "Compare ZXQELLA7 and ZXQCNN7, then say what this library still lacks on transfer learning.",
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["compare_papers", "search_library", "read_paper", "list_papers"]
+        },
+        {
+          "type": "outcome",
+          "contains_any": ["ELLA", "CNN", "lack", "gap", "cover", "library"]
+        }
+      ]
+    },
+    {
+      "id": "skill-cite-from-library",
+      "kind": "capability",
+      "query": "Load the cite-from-library skill, then cite ZXQELLA7's transfer claim using those rules.",
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["load_skill"]
+        },
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_paper"]
+        },
+        { "type": "citations", "require_indices": true }
       ]
     }
   ]

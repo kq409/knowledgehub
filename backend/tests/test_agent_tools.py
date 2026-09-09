@@ -42,6 +42,7 @@ from services.agent.tools import (
     compare_papers,
     connect_note,
     link_note,
+    list_documents,
     list_notes,
     list_papers,
     present_workspace,
@@ -222,6 +223,40 @@ async def test_list_papers_reports_coverage(library: Library):
     assert "2006" in result.content
     assert "3 chunk(s)" in result.content
     assert "paper(s)" in result.summary
+    assert "[1]" in result.content
+    citations = library.ctx.registry.citations()
+    assert citations
+    assert all(item.section == "inventory" for item in citations)
+    assert any("2006" in item.snippet for item in citations)
+
+
+async def test_list_papers_includes_stored_summary(library: Library):
+    paper = await library.ctx.session.get(Paper, library.paper.id)
+    assert paper is not None
+    paper.summary = "ELLA transfers knowledge across sequential tasks."
+    paper.digest = {
+        "problem": "Lifelong learning",
+        "method": "Shared latent basis",
+        "key_results": "Transfer across tasks",
+        "limitations": "",
+    }
+    paper.digest_status = "ready"
+    await library.ctx.session.commit()
+
+    result = await list_papers(library.ctx)
+
+    assert "ELLA transfers knowledge across sequential tasks." in result.content
+    assert "Shared latent basis" in result.content
+
+
+async def test_list_documents_empty_registers_inventory(library: Library):
+    result = await list_documents(library.ctx)
+
+    assert "The document library is empty." in result.content
+    citations = library.ctx.registry.citations()
+    assert len(citations) == 1
+    assert "empty" in citations[0].snippet.lower()
+    assert citations[0].section == "inventory"
 
 
 async def test_list_notes_marks_notes_as_the_researchers_own(library: Library):
@@ -275,6 +310,7 @@ async def test_search_library_respects_disabled_sources(library: Library):
     library.ctx.include_papers = False
     library.ctx.include_voice_notes = False
     library.ctx.include_handwritten_notes = False
+    library.ctx.include_documents = False
 
     with pytest.raises(ToolError, match="disabled every source"):
         await search_library(library.ctx, query="ella")

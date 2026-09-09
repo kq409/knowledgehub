@@ -1,18 +1,19 @@
-import { ChevronDown, ChevronRight, Mic, Square } from 'lucide-react';
+import { ChevronDown, ChevronRight, Mic, Plus, Square, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './ChatResearch.module.css';
 import type {
+  ChatApproval,
   ChatArtifact,
   ChatEvent,
   ChatMessage,
+  ChatProgress,
   ChatResearchProps,
   ChatSubagent,
   ChatToolStep,
   ChatTurn,
   WorkspaceState,
 } from '../types';
-import { Box } from './Box';
 import { TextBox } from './TextBox';
 import { useSpeechToComposer } from '../hooks/useSpeechToComposer';
 
@@ -21,8 +22,10 @@ const TOOL_LABELS: Record<string, string> = {
   web_search: 'Searching the web',
   list_papers: 'Listing papers',
   list_notes: 'Listing notes',
+  list_documents: 'Listing documents',
   read_paper: 'Reading a paper',
   read_note: 'Reading a note',
+  read_document: 'Reading a document',
   compare_papers: 'Comparing papers',
   present_workspace: 'Opening a workspace',
   preview_note_extraction: 'Structuring a note',
@@ -33,9 +36,13 @@ const TOOL_LABELS: Record<string, string> = {
   memory_search: 'Searching memories',
   memory_write: 'Remembering',
   memory_delete: 'Forgetting a memory',
+  link_note: 'Linking a note',
+  unlink_note: 'Unlinking a note',
+  connect_note: 'Connecting a note',
+  fetch_tool_result: 'Reading a truncated result',
 };
 
-const MAIN_AGENT = 'main';
+export const MAIN_AGENT = 'main';
 
 function networkErrorMessage(err: unknown): string {
   if (err instanceof TypeError && err.message === 'Failed to fetch') {
@@ -94,7 +101,10 @@ function stepDetail(step: ChatToolStep): string {
   return toolStepLabel(step);
 }
 
-function emptyTurn(question: string): ChatTurn {
+function emptyTurn(
+  question: string,
+  attachments: ChatTurn['attachments'] = []
+): ChatTurn {
   return {
     question,
     steps: [],
@@ -104,6 +114,10 @@ function emptyTurn(question: string): ChatTurn {
     todos: [],
     subagents: [],
     compactions: [],
+    notices: [],
+    approvals: [],
+    progress: null,
+    attachments,
     model: null,
     error: null,
     verdict: null,
@@ -137,7 +151,11 @@ function workspaceFromArtifact(artifact: ChatArtifact): WorkspaceState | null {
   return null;
 }
 
-function CompactionNotices({ items }: { items: ChatTurn['compactions'] }) {
+export function CompactionNotices({
+  items,
+}: {
+  items: ChatTurn['compactions'];
+}) {
   if (items.length === 0) {
     return null;
   }
@@ -155,7 +173,110 @@ function CompactionNotices({ items }: { items: ChatTurn['compactions'] }) {
   );
 }
 
-function StepList({ steps }: { steps: ChatToolStep[] }) {
+export function HarnessNotices({ items }: { items: ChatTurn['notices'] }) {
+  if (items.length === 0) {
+    return null;
+  }
+  return (
+    <>
+      {items.map((item, index) => (
+        <p key={index} className={styles.compactNotice} role="status">
+          {item.message}
+        </p>
+      ))}
+    </>
+  );
+}
+
+export function ProgressLine({ progress }: { progress: ChatProgress | null }) {
+  if (!progress) {
+    return null;
+  }
+  const total = progress.total > 0 ? `/${progress.total}` : '';
+  return (
+    <p className={styles.compactNotice} role="status">
+      {progress.tool} · {progress.phase}: {progress.label} ({progress.done}
+      {total}
+      {progress.cached ? ', reused' : ''})
+    </p>
+  );
+}
+
+function argumentPreview(value: Record<string, unknown>): string {
+  const entries = Object.entries(value).slice(0, 4);
+  if (entries.length === 0) {
+    return '';
+  }
+  return entries
+    .map(([key, item]) => `${key}: ${String(item).slice(0, 80)}`)
+    .join(' · ');
+}
+
+async function sendApproval(requestId: string, approved: boolean): Promise<void> {
+  const response = await fetch('/api/chat/approve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ request_id: requestId, approved }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorDetail(response));
+  }
+}
+
+export function ApprovalCards({ items }: { items: ChatApproval[] }) {
+  if (items.length === 0) {
+    return null;
+  }
+  return (
+    <div className={styles.approvalList}>
+      {items.map((item) => (
+        <div key={item.request_id} className={styles.approvalCard} role="status">
+          <p className={styles.approvalTitle}>
+            {item.status === 'pending'
+              ? `Allow ${item.tool}?`
+              : item.status === 'approved'
+                ? `Allowed ${item.tool}`
+                : item.status === 'timeout'
+                  ? `${item.tool} timed out`
+                  : `Declined ${item.tool}`}
+          </p>
+          {item.reason ? (
+            <p className={styles.approvalReason}>{item.reason}</p>
+          ) : null}
+          {argumentPreview(item.arguments) ? (
+            <p className={styles.approvalReason}>
+              {argumentPreview(item.arguments)}
+            </p>
+          ) : null}
+          {item.status === 'pending' ? (
+            <div className={styles.approvalActions}>
+              <button
+                type="button"
+                className={styles.approvalAllow}
+                onClick={() => {
+                  void sendApproval(item.request_id, true);
+                }}
+              >
+                Allow
+              </button>
+              <button
+                type="button"
+                className={styles.approvalDeny}
+                onClick={() => {
+                  void sendApproval(item.request_id, false);
+                }}
+              >
+                Decline
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function StepList({ steps }: { steps: ChatToolStep[] }) {
   return (
     <ol className={styles.steps}>
       {steps.map((step, stepIndex) => (
@@ -177,7 +298,7 @@ function StepList({ steps }: { steps: ChatToolStep[] }) {
   );
 }
 
-function NestedSubagents({
+export function NestedSubagents({
   subagents,
   openIds,
   onToggle,
@@ -260,20 +381,27 @@ export function ChatResearch({
   onWorkspace,
   onTurnsChange,
   composerSlot,
+  conversationId = null,
+  onConversation,
 }: ChatResearchProps) {
   const [question, setQuestion] = useState('');
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [includePapers, setIncludePapers] = useState(true);
   const [includeVoiceNotes, setIncludeVoiceNotes] = useState(true);
   const [includeHandwrittenNotes, setIncludeHandwrittenNotes] = useState(true);
+  const [includeDocuments, setIncludeDocuments] = useState(true);
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [openTraces, setOpenTraces] = useState<Record<number, boolean>>({});
-  const [openSubagents, setOpenSubagents] = useState<Record<string, boolean>>({});
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const skipNextLoad = useRef(false);
   const onWorkspaceRef = useRef(onWorkspace);
   onWorkspaceRef.current = onWorkspace;
   const onTurnsChangeRef = useRef(onTurnsChange);
   onTurnsChangeRef.current = onTurnsChange;
+  const onConversationRef = useRef(onConversation);
+  onConversationRef.current = onConversation;
   const speech = useSpeechToComposer(question, setQuestion);
   const speechRef = useRef(speech);
   speechRef.current = speech;
@@ -282,37 +410,116 @@ export function ChatResearch({
     onTurnsChangeRef.current?.(turns);
   }, [turns]);
 
+  useEffect(() => {
+    if (skipNextLoad.current) {
+      skipNextLoad.current = false;
+      return;
+    }
+    if (!conversationId) {
+      setTurns([]);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await fetch(`/api/conversations/${conversationId}`);
+        if (!response.ok) {
+          throw new Error(await readErrorDetail(response));
+        }
+        const data = (await response.json()) as {
+          turns: { payload: ChatTurn }[];
+        };
+        if (cancelled) {
+          return;
+        }
+        setTurns(
+          data.turns.map((item) => ({
+            ...emptyTurn(item.payload?.question ?? ''),
+            ...item.payload,
+            attachments: item.payload?.attachments ?? [],
+            approvals: item.payload?.approvals ?? [],
+            isRunning: false,
+          }))
+        );
+      } catch (err) {
+        if (!cancelled) {
+          setError('Could not load conversation: ' + networkErrorMessage(err));
+        }
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId]);
+
   const hasSource =
-    includePapers || includeVoiceNotes || includeHandwrittenNotes;
+    includePapers ||
+    includeVoiceNotes ||
+    includeHandwrittenNotes ||
+    includeDocuments;
   const canSend =
-    question.trim().length > 0 &&
+    (question.trim().length > 0 || attachments.length > 0) &&
     hasSource &&
     !isRunning &&
     !speech.isTranscribing &&
     !(speech.isListening && !speech.supportsLive);
 
-  const updateLastTurn = useCallback(
-    (update: (turn: ChatTurn) => ChatTurn) => {
-      setTurns((current) => {
-        if (current.length === 0) {
-          return current;
-        }
-        const next = [...current];
-        const last = next[next.length - 1];
-        if (!last) {
-          return current;
-        }
-        next[next.length - 1] = update(last);
-        return next;
-      });
-    },
-    []
-  );
+  const addFiles = useCallback((incoming: FileList | File[]) => {
+    const next: File[] = [];
+    const rejected: string[] = [];
+    for (const file of Array.from(incoming)) {
+      if (file.type.startsWith('audio/')) {
+        rejected.push(`${file.name} is audio — use the Voice notes tab`);
+        continue;
+      }
+      const name = file.name.toLowerCase();
+      const ok =
+        file.type.includes('pdf') ||
+        name.endsWith('.pdf') ||
+        name.endsWith('.md') ||
+        name.endsWith('.txt') ||
+        name.endsWith('.csv') ||
+        name.endsWith('.docx') ||
+        file.type.includes('csv') ||
+        file.type.includes('markdown') ||
+        file.type.includes('wordprocessingml');
+      if (!ok) {
+        rejected.push(
+          `${file.name} is not a PDF, Markdown, text, CSV, or Word file`
+        );
+        continue;
+      }
+      next.push(file);
+    }
+    if (rejected.length) {
+      setError(rejected.join('. '));
+    }
+    if (next.length) {
+      setAttachments((current) => [...current, ...next]);
+    }
+  }, []);
+
+  const updateLastTurn = useCallback((update: (turn: ChatTurn) => ChatTurn) => {
+    setTurns((current) => {
+      if (current.length === 0) {
+        return current;
+      }
+      const next = [...current];
+      const last = next[next.length - 1];
+      if (!last) {
+        return current;
+      }
+      next[next.length - 1] = update(last);
+      return next;
+    });
+  }, []);
 
   const send = useCallback(async () => {
     const trimmed = question.trim();
-    if (!trimmed) {
-      setError('Enter a question first.');
+    const pendingFiles = attachments;
+    if (!trimmed && pendingFiles.length === 0) {
+      setError('Enter a question or attach a file.');
       return;
     }
     if (!hasSource) {
@@ -331,22 +538,53 @@ export function ChatResearch({
           ]
         : []
     );
+    const firstFile = pendingFiles[0];
+    const userText =
+      trimmed ||
+      (pendingFiles.length === 1 && firstFile
+        ? `Please file and use the attached file (${firstFile.name}).`
+        : `Please file and use the ${pendingFiles.length} attached files.`);
 
     setQuestion('');
+    setAttachments([]);
     setError(null);
     setIsRunning(true);
-    setTurns((current) => [...current, emptyTurn(trimmed)]);
+    setTurns((current) => [
+      ...current,
+      emptyTurn(
+        userText,
+        pendingFiles.map((file) => ({
+          kind: 'document',
+          id: file.name,
+          title: file.name,
+          filename: file.name,
+          status: 'pending',
+        }))
+      ),
+    ]);
 
     try {
+      const formData = new FormData();
+      formData.append(
+        'messages',
+        JSON.stringify([...history, { role: 'user', content: userText }])
+      );
+      formData.append('include_papers', String(includePapers));
+      formData.append('include_voice_notes', String(includeVoiceNotes));
+      formData.append(
+        'include_handwritten_notes',
+        String(includeHandwrittenNotes)
+      );
+      formData.append('include_documents', String(includeDocuments));
+      if (conversationId) {
+        formData.append('conversation_id', conversationId);
+      }
+      for (const file of pendingFiles) {
+        formData.append('files', file, file.name);
+      }
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [...history, { role: 'user', content: trimmed }],
-          include_papers: includePapers,
-          include_voice_notes: includeVoiceNotes,
-          include_handwritten_notes: includeHandwrittenNotes,
-        }),
+        body: formData,
       });
       if (!response.ok || !response.body) {
         throw new Error(await readErrorDetail(response));
@@ -448,6 +686,48 @@ export function ChatResearch({
               },
             ],
           }));
+        } else if (event.type === 'notice') {
+          updateLastTurn((turn) => ({
+            ...turn,
+            notices: [
+              ...turn.notices,
+              { kind: event.kind, message: event.message },
+            ],
+          }));
+        } else if (event.type === 'progress') {
+          // Only the latest matters: a comparison reports once per paper and
+          // the researcher wants to know where it is, not where it has been.
+          updateLastTurn((turn) => ({
+            ...turn,
+            progress: {
+              tool: event.tool,
+              phase: event.phase,
+              label: event.label,
+              done: event.done,
+              total: event.total,
+              cached: event.cached,
+            },
+          }));
+        } else if (event.type === 'approval') {
+          updateLastTurn((turn) => {
+            const next = [...(turn.approvals ?? [])];
+            const index = next.findIndex(
+              (item) => item.request_id === event.request_id
+            );
+            const card: ChatApproval = {
+              request_id: event.request_id,
+              tool: event.tool,
+              arguments: event.arguments,
+              reason: event.reason,
+              status: event.status,
+            };
+            if (index >= 0) {
+              next[index] = card;
+            } else {
+              next.push(card);
+            }
+            return { ...turn, approvals: next };
+          });
         } else if (event.type === 'artifact') {
           const artifact = {
             kind: event.kind,
@@ -480,7 +760,36 @@ export function ChatResearch({
         } else if (event.type === 'citations') {
           updateLastTurn((turn) => ({ ...turn, citations: event.citations }));
         } else if (event.type === 'done') {
-          updateLastTurn((turn) => ({ ...turn, model: event.model }));
+          updateLastTurn((turn) => ({
+            ...turn,
+            model: event.model,
+            progress: null,
+          }));
+        } else if (event.type === 'attachment') {
+          updateLastTurn((turn) => {
+            const next = turn.attachments.filter(
+              (item) => item.id !== event.filename && item.id !== event.id
+            );
+            const pendingIndex = next.findIndex(
+              (item) =>
+                item.filename === event.filename && item.status === 'pending'
+            );
+            const filed = {
+              kind: event.kind,
+              id: event.id,
+              title: event.title,
+              filename: event.filename,
+              status: event.status,
+            };
+            if (pendingIndex >= 0) {
+              next[pendingIndex] = filed;
+              return { ...turn, attachments: next };
+            }
+            return { ...turn, attachments: [...next, filed] };
+          });
+        } else if (event.type === 'conversation') {
+          skipNextLoad.current = true;
+          onConversationRef.current?.({ id: event.id, title: event.title });
         } else if (event.type === 'error') {
           updateLastTurn((turn) => ({ ...turn, error: event.message }));
         }
@@ -495,19 +804,37 @@ export function ChatResearch({
     }
   }, [
     question,
+    attachments,
     turns,
     hasSource,
     includePapers,
     includeVoiceNotes,
     includeHandwrittenNotes,
+    includeDocuments,
+    conversationId,
     updateLastTurn,
   ]);
 
-  const docked = composerSlot != null;
-  const hideInlineComposer = turns.length > 0;
   const composer = (
     <div
-      className={`${styles.composer} ${docked ? styles.composerDocked : ''}`}
+      className={`${styles.composer} ${styles.composerDocked} ${
+        isDragging ? styles.composerDragging : ''
+      }`}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setIsDragging(true);
+      }}
+      onDragLeave={(event) => {
+        event.preventDefault();
+        setIsDragging(false);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        setIsDragging(false);
+        if (event.dataTransfer.files?.length) {
+          addFiles(event.dataTransfer.files);
+        }
+      }}
     >
       {(error || speech.error) && (
         <div className={styles.error} role="alert">
@@ -550,7 +877,37 @@ export function ChatResearch({
           />
           Handwritten
         </label>
+        <label className={styles.check}>
+          <input
+            type="checkbox"
+            checked={includeDocuments}
+            onChange={(e) => setIncludeDocuments(e.target.checked)}
+          />
+          Documents
+        </label>
       </fieldset>
+
+      {attachments.length > 0 && (
+        <ul className={styles.chips}>
+          {attachments.map((file, index) => (
+            <li key={`${file.name}-${index}`} className={styles.chip}>
+              <span>{file.name}</span>
+              <button
+                type="button"
+                className={styles.chipRemove}
+                aria-label={`Remove ${file.name}`}
+                onClick={() =>
+                  setAttachments((current) =>
+                    current.filter((_, itemIndex) => itemIndex !== index)
+                  )
+                }
+              >
+                <X className={styles.chipIcon} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <label className={styles.fieldLabel} htmlFor="chat-question">
         Message
@@ -562,7 +919,7 @@ export function ChatResearch({
         onChange={setQuestion}
         rows={3}
         isDisabled={isRunning || speech.isTranscribing}
-        placeholder="Ask, compare papers, or capture a note…"
+        placeholder="Ask, attach a file, compare papers, or capture a note…"
         ariaLabel="Research question"
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey) {
@@ -575,6 +932,29 @@ export function ChatResearch({
       />
 
       <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.plusButton}
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isRunning}
+          aria-label="Attach a file"
+          title="Attach PDF, Markdown, text, CSV, or Word"
+        >
+          <Plus className={styles.plusIcon} />
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".pdf,.md,.txt,.csv,.docx,application/pdf,text/markdown,text/plain,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          className={styles.hiddenInput}
+          onChange={(event) => {
+            if (event.target.files?.length) {
+              addFiles(event.target.files);
+            }
+            event.target.value = '';
+          }}
+        />
         <button
           type="button"
           className={`${styles.micButton} ${
@@ -613,106 +993,12 @@ export function ChatResearch({
               ? 'Transcribing…'
               : 'Send'}
         </button>
-        {turns.length > 0 && !isRunning && (
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            onClick={() => {
-              setTurns([]);
-              setOpenTraces({});
-              setOpenSubagents({});
-            }}
-          >
-            New conversation
-          </button>
-        )}
       </div>
     </div>
   );
 
-  return (
-    <div className={styles.chat}>
-      <div className={styles.thread}>
-        {turns.length === 0 && (
-          <p className={styles.intro}>
-            Ask in your own words. After you send, the conversation and this
-            box move to the right; tool calls stay here.
-          </p>
-        )}
-
-        {turns.map((turn, index) => {
-          const isTraceOpen = openTraces[index] ?? turn.isRunning;
-          const mainSteps = turn.steps.filter(
-            (step) => step.agentId === MAIN_AGENT || !step.agentId
-          );
-          const hasTrace = mainSteps.length > 0 || turn.subagents.length > 0;
-          return (
-            <Box key={index} header={turn.question} compact>
-              <CompactionNotices items={turn.compactions} />
-
-              {hasTrace ? (
-                <div className={styles.trace}>
-                  <button
-                    type="button"
-                    className={styles.traceToggle}
-                    aria-expanded={isTraceOpen}
-                    onClick={() =>
-                      setOpenTraces((current) => ({
-                        ...current,
-                        [index]: !isTraceOpen,
-                      }))
-                    }
-                  >
-                    {isTraceOpen ? (
-                      <ChevronDown className={styles.chevron} />
-                    ) : (
-                      <ChevronRight className={styles.chevron} />
-                    )}
-                    {mainSteps.length} tool step
-                    {mainSteps.length === 1 ? '' : 's'}
-                    {turn.subagents.length > 0
-                      ? ` · ${turn.subagents.length} nested`
-                      : ''}
-                  </button>
-                  {isTraceOpen && (
-                    <>
-                      {mainSteps.length > 0 && <StepList steps={mainSteps} />}
-                      <NestedSubagents
-                        subagents={turn.subagents}
-                        openIds={openSubagents}
-                        onToggle={(id) =>
-                          setOpenSubagents((current) => ({
-                            ...current,
-                            [id]: !(current[id] ?? true),
-                          }))
-                        }
-                      />
-                    </>
-                  )}
-                </div>
-              ) : turn.isRunning ? (
-                <p className={styles.working} role="status">
-                  Waiting for tools…
-                </p>
-              ) : (
-                <p className={styles.working}>No tools used</p>
-              )}
-
-              {turn.error && (
-                <p className={styles.caveat} role="status">
-                  {turn.error}
-                </p>
-              )}
-            </Box>
-          );
-        })}
-      </div>
-
-      {composerSlot
-        ? createPortal(composer, composerSlot)
-        : hideInlineComposer
-          ? null
-          : composer}
-    </div>
-  );
+  if (!composerSlot) {
+    return null;
+  }
+  return createPortal(composer, composerSlot);
 }

@@ -53,16 +53,20 @@ async def test_todo_write_emits_todo_sse_event():
         reply(
             json.dumps(
                 {
-                    "tool": "todo_write",
-                    "input": {
-                        "items": [
-                            {
-                                "id": "1",
-                                "content": "List the library",
-                                "status": "in_progress",
-                            }
-                        ]
-                    },
+                    "tools": [
+                        {
+                            "name": "todo_write",
+                            "input": {
+                                "items": [
+                                    {
+                                        "id": "1",
+                                        "content": "List the library",
+                                        "status": "in_progress",
+                                    }
+                                ]
+                            },
+                        }
+                    ]
                 }
             )
         ),
@@ -87,8 +91,12 @@ async def test_spawn_subagent_streams_nested_events_and_merges_citations():
         reply(
             json.dumps(
                 {
-                    "tool": "spawn_subagent",
-                    "input": {"goal": "Dig into ELLA method"},
+                    "tools": [
+                        {
+                            "name": "spawn_subagent",
+                            "input": {"goal": "Dig into ELLA method"},
+                        }
+                    ]
                 }
             )
         ),
@@ -161,7 +169,11 @@ async def test_spawn_subagent_streams_nested_events_and_merges_citations():
 async def test_second_spawn_in_same_turn_is_refused():
     client = MagicMock()
     client.chat.completions.create.side_effect = [
-        reply(json.dumps({"tool": "spawn_subagent", "input": {"goal": "First dig"}})),
+        reply(
+            json.dumps(
+                {"tools": [{"name": "spawn_subagent", "input": {"goal": "First dig"}}]}
+            )
+        ),
         reply("Nested summary one."),
         reply(json.dumps({"tool": "spawn_subagent", "input": {"goal": "Second dig"}})),
         reply("I could not spawn again."),

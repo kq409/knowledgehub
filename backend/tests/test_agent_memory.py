@@ -318,7 +318,7 @@ async def test_agent_recalls_memory_without_memory_search(session):
     )
     client = MagicMock()
     client.chat.completions.create.side_effect = [
-        reply("Your library holds papers from 2006."),
+        reply('{"tools": []}'),
         reply("Your library holds papers from 2006."),
     ]
     agent = text_protocol_agent(client)
@@ -336,7 +336,7 @@ async def test_agent_recalls_memory_without_memory_search(session):
             ),
         )
     ]
-    first_messages = client.chat.completions.create.call_args_list[0].kwargs["messages"]
+    first_messages = client.chat.completions.create.call_args_list[1].kwargs["messages"]
     system = first_messages[0]["content"]
     assert "preferred_compare_dimensions" in system
     assert "method, dataset" in system
@@ -352,12 +352,16 @@ async def test_agent_memory_write_emits_artifact_event(session):
         reply(
             json.dumps(
                 {
-                    "tool": "memory_write",
-                    "input": {
-                        "key": "preferred_compare_dimensions",
-                        "content": "method, dataset",
-                        "category": "preference",
-                    },
+                    "tools": [
+                        {
+                            "name": "memory_write",
+                            "input": {
+                                "key": "preferred_compare_dimensions",
+                                "content": "method, dataset",
+                                "category": "preference",
+                            },
+                        }
+                    ]
                 }
             )
         ),

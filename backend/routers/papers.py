@@ -19,12 +19,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import db
 from db import get_session
-from models import Paper, PaperChunk, PaperStatus
+from models import DigestStatus, Paper, PaperChunk, PaperStatus
 from routers.notes import to_response_with_links as note_to_response
-from schemas import NoteResponse, PaperChunkResponse, PaperResponse, PaperUpdate
+from schemas import (
+    DigestStatus as DigestStatusSchema,
+)
+from schemas import (
+    NoteResponse,
+    PaperChunkResponse,
+    PaperResponse,
+    PaperUpdate,
+)
+from services.agent.notifications import FAILED, notify_ingested
 from services.library_ingest import create_pending_paper, validate_pdf_bytes
 from services.note_links import links_by_note_ids, notes_linked_to_paper
 from services.note_pipeline import chunk_count_for as note_chunk_count_for
+from services.paper_digest import generate_and_store_digest, paper_digest_from
 from services.paper_parser import PaperParser
 from services.paper_pipeline import (
     PaperPipeline,
@@ -39,12 +49,20 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 def to_response(paper: Paper, chunk_count: int) -> PaperResponse:
+    digest_status = paper.digest_status or DigestStatus.pending.value
+    try:
+        parsed_digest_status = DigestStatusSchema(digest_status)
+    except ValueError:
+        parsed_digest_status = DigestStatusSchema.pending
     return PaperResponse(
         id=paper.id,
         title=paper.title,
         authors=paper.authors,
         year=paper.year,
         abstract=paper.abstract,
+        summary=paper.summary,
+        digest=paper_digest_from(paper.digest),
+        digest_status=parsed_digest_status,
         source=paper.source,
         tags=paper.tags,
         original_filename=paper.original_filename,
@@ -147,8 +165,11 @@ async def process_uploaded_paper(paper_id: uuid.UUID, app: FastAPI) -> None:
                 f"✅ Paper processed: {paper.title} ({len(parsed.chunks)} chunks)",
                 flush=True,
             )
+            notify_ingested("paper", paper.title, detail=f"{len(parsed.chunks)} chunks")
+        await _digest_processed_paper(app, paper_id)
     except Exception as exc:
         print(f"❌ Paper processing failed: {exc}", flush=True)
+        notify_ingested("paper", fallback_title, outcome=FAILED, detail=str(exc)[:200])
         async with db.SessionLocal() as session:
             await mark_paper_status(
                 session, paper_id, PaperStatus.failed, error=str(exc)[:2000]
@@ -173,6 +194,49 @@ async def resume_pending_papers(app: FastAPI) -> None:
     print(f"⏳ Resuming {len(ids)} queued paper(s)...", flush=True)
     for paper_id in ids:
         await process_uploaded_paper(paper_id, app)
+
+
+async def resume_missing_digests(app: FastAPI) -> None:
+    """Generate stored understandings for ready papers that never got one."""
+    if db.SessionLocal is None:
+        return
+    async with db.SessionLocal() as session:
+        result = await session.execute(
+            select(Paper.id).where(
+                Paper.processing_status == PaperStatus.ready.value,
+                Paper.digest_status != DigestStatus.ready.value,
+            )
+        )
+        ids = list(result.scalars().all())
+    if not ids:
+        return
+    print(f"⏳ Generating digest for {len(ids)} paper(s)...", flush=True)
+    for paper_id in ids:
+        await _digest_processed_paper(app, paper_id)
+
+
+async def _digest_processed_paper(app: FastAPI, paper_id: uuid.UUID) -> None:
+    agent = getattr(app.state, "agent", None)
+    llm_client = getattr(agent, "llm_client", None)
+    llm_model = getattr(agent, "llm_model", None)
+    if llm_client is None or not llm_model or db.SessionLocal is None:
+        return
+    try:
+        async with db.SessionLocal() as session:
+            paper = await session.get(Paper, paper_id)
+            if paper is None:
+                return
+            if paper.processing_status != PaperStatus.ready.value:
+                return
+            await generate_and_store_digest(
+                session,
+                paper,
+                llm_client=llm_client,
+                llm_model=llm_model,
+            )
+            print(f"🧠 Paper digest {paper.digest_status}: {paper.title}", flush=True)
+    except Exception as exc:
+        print(f"⚠️  Paper digest failed for {paper_id}: {exc}", flush=True)
 
 
 def _run_parse_and_embed(pipeline: PaperPipeline, pdf_path: str, fallback_title: str):

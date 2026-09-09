@@ -131,6 +131,15 @@ export interface VoiceNoteListProps {
 
 export type PaperStatus = ProcessingStatus;
 
+export type DigestStatus = 'pending' | 'ready' | 'failed';
+
+export interface PaperDigest {
+  problem: string;
+  method: string;
+  key_results: string;
+  limitations: string;
+}
+
 export type NoteSourceType = 'voice' | 'handwritten';
 
 export interface LibraryNote extends StructuredNoteFields {
@@ -160,11 +169,27 @@ export interface Paper {
   authors: string[];
   year: number | null;
   abstract: string | null;
+  summary: string | null;
+  digest: PaperDigest;
+  digest_status: DigestStatus;
   source: string;
   tags: string[];
   original_filename: string;
   page_count: number | null;
   processing_status: PaperStatus;
+  processing_error: string | null;
+  chunk_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LibraryDocument {
+  id: string;
+  title: string;
+  original_filename: string;
+  mime_type: string | null;
+  extracted_text: string | null;
+  processing_status: ProcessingStatus;
   processing_error: string | null;
   chunk_count: number;
   created_at: string;
@@ -196,7 +221,12 @@ export interface ConnectResponse {
   generated_at: string;
 }
 
-export type CitationSourceType = 'paper' | 'voice' | 'handwritten' | 'web';
+export type CitationSourceType =
+  | 'paper'
+  | 'voice'
+  | 'handwritten'
+  | 'document'
+  | 'web';
 
 export type QueryKind = 'library' | 'field_wide';
 
@@ -272,7 +302,9 @@ export type GateStatus =
   | 'supported'
   | 'unsupported'
   | 'unchecked'
-  | 'retrying';
+  | 'retrying'
+  | 'incomplete'
+  | 'impossible';
 
 export interface ChatGateProblem {
   kind: string;
@@ -334,11 +366,7 @@ export interface AgentMemoryItem {
   updated_at: string;
 }
 
-export type TodoStatus =
-  | 'pending'
-  | 'in_progress'
-  | 'completed'
-  | 'cancelled';
+export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
 
 export interface ChatTodoItem {
   id: string;
@@ -357,10 +385,37 @@ export interface ChatSubagent {
 }
 
 export interface ChatCompaction {
-  mode: 'truncate' | 'summarize';
+  mode: 'truncate' | 'summarize' | 'reactive';
   beforeChars: number;
   afterChars: number;
   agentId: string;
+}
+
+export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'timeout';
+
+export interface ChatApproval {
+  request_id: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  reason: string;
+  status: ApprovalStatus;
+}
+
+/** Something the harness did that the answer alone would not explain: a
+ *  retry after a rate limit, or a paper that finished parsing mid-turn. */
+export interface ChatNotice {
+  kind: string;
+  message: string;
+}
+
+/** Where a long-running tool has got to. Only the latest one is kept. */
+export interface ChatProgress {
+  tool: string;
+  phase: string;
+  label: string;
+  done: number;
+  total: number;
+  cached: boolean;
 }
 
 export interface ChatTurn {
@@ -372,16 +427,38 @@ export interface ChatTurn {
   todos: ChatTodoItem[];
   subagents: ChatSubagent[];
   compactions: ChatCompaction[];
+  notices: ChatNotice[];
+  approvals: ChatApproval[];
+  progress: ChatProgress | null;
+  attachments: ChatAttachment[];
   model: string | null;
   error: string | null;
   verdict: ChatVerdict | null;
   isRunning: boolean;
 }
 
+export interface ChatAttachment {
+  kind: 'paper' | 'note' | 'document';
+  id: string;
+  title: string;
+  filename: string;
+  status: string;
+}
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  turn_count: number;
+}
+
 export interface ChatResearchProps {
   onWorkspace?: (workspace: WorkspaceState) => void;
   onTurnsChange?: (turns: ChatTurn[]) => void;
   composerSlot?: HTMLElement | null;
+  conversationId?: string | null;
+  onConversation?: (conversation: { id: string; title: string }) => void;
 }
 
 export interface ChatThreadProps {
@@ -416,13 +493,46 @@ export type ChatEvent =
     }
   | {
       type: 'compact';
-      mode: 'truncate' | 'summarize';
+      mode: 'truncate' | 'summarize' | 'reactive';
       before_chars: number;
       after_chars: number;
       agent_id?: string;
     }
+  | {
+      type: 'notice';
+      kind: string;
+      message: string;
+      agent_id?: string;
+    }
+  | {
+      type: 'progress';
+      tool: string;
+      phase: string;
+      label: string;
+      done: number;
+      total: number;
+      cached: boolean;
+    }
+  | {
+      type: 'approval';
+      request_id: string;
+      tool: string;
+      arguments: Record<string, unknown>;
+      reason: string;
+      status: ApprovalStatus;
+      agent_id?: string;
+    }
   | { type: 'done'; model: string; prompt_version: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | {
+      type: 'attachment';
+      kind: 'paper' | 'note' | 'document';
+      id: string;
+      title: string;
+      filename: string;
+      status: string;
+    }
+  | { type: 'conversation'; id: string; title: string };
 
 export const DEFAULT_COMPARE_DIMENSIONS = [
   'problem',

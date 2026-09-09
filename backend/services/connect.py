@@ -358,6 +358,7 @@ class ConnectService:
             include_papers=True,
             include_voice_notes=False,
             include_handwritten_notes=False,
+            include_documents=False,
             top_k=chunk_top_k,
             expand_links=False,
         )

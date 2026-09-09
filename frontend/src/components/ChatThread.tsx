@@ -1,7 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import styles from './ChatThread.module.css';
+import traceStyles from './ChatResearch.module.css';
 import type {
   ChatArtifact,
+  ChatAttachment,
   ChatCitation,
   ChatThreadProps,
   ChatTodoItem,
@@ -13,6 +16,15 @@ import type {
   TodoStatus,
 } from '../types';
 import { Spinner } from './Spinner';
+import {
+  CompactionNotices,
+  HarnessNotices,
+  MAIN_AGENT,
+  NestedSubagents,
+  ProgressLine,
+  StepList,
+  ApprovalCards,
+} from './ChatResearch';
 
 function sourceLabel(sourceType: CitationSourceType): string {
   if (sourceType === 'paper') {
@@ -23,6 +35,9 @@ function sourceLabel(sourceType: CitationSourceType): string {
   }
   if (sourceType === 'web') {
     return 'Web';
+  }
+  if (sourceType === 'document') {
+    return 'Document';
   }
   return 'Handwritten';
 }
@@ -37,7 +52,20 @@ function badgeClass(sourceType: CitationSourceType): string {
   if (sourceType === 'web') {
     return styles.web ?? '';
   }
+  if (sourceType === 'document') {
+    return styles.document ?? '';
+  }
   return styles.handwritten ?? '';
+}
+
+function attachmentLabel(item: ChatAttachment): string {
+  const kind =
+    item.kind === 'paper'
+      ? 'Paper'
+      : item.kind === 'note'
+        ? 'Note'
+        : 'Document';
+  return `${kind}: ${item.title || item.filename}`;
 }
 
 function citationMeta(citation: ChatCitation): string {
@@ -70,6 +98,18 @@ function verdictNotice(verdict: ChatVerdict | null): string | null {
     return (
       'The evidence check did not clear this answer. ' +
       (verdict.reason || 'Read the cited snippets before relying on it.')
+    );
+  }
+  if (verdict.status === 'incomplete') {
+    return (
+      'This answer did not cover every part of the question. ' +
+      (verdict.reason || 'Ask again if you still need the rest.')
+    );
+  }
+  if (verdict.status === 'impossible') {
+    return (
+      'This request cannot be completed from the library. ' +
+      (verdict.reason || 'Try a different question or add sources.')
     );
   }
   if (verdict.status === 'unchecked') {
@@ -149,7 +189,9 @@ function TodoPanel({ items }: { items: ChatTodoItem[] }) {
             />
             <span
               className={
-                item.status === 'cancelled' ? styles.todoCancelledText : undefined
+                item.status === 'cancelled'
+                  ? styles.todoCancelledText
+                  : undefined
               }
             >
               {item.content}
@@ -174,7 +216,9 @@ function Citations({ citations }: { citations: ChatCitation[] }) {
         >
           <div className={styles.citationHeader}>
             <span className={styles.index}>[{citation.index}]</span>
-            <span className={`${styles.badge} ${badgeClass(citation.source_type)}`}>
+            <span
+              className={`${styles.badge} ${badgeClass(citation.source_type)}`}
+            >
               {sourceLabel(citation.source_type)}
             </span>
             {citation.url ? (
@@ -208,9 +252,13 @@ function AssistantBody({ turn }: { turn: ChatTurn }) {
     <div className={styles.assistant}>
       <TodoPanel items={turn.todos} />
 
+      <HarnessNotices items={turn.notices ?? []} />
+      <ApprovalCards items={turn.approvals ?? []} />
+      <ProgressLine progress={turn.progress ?? null} />
+
       {isRetrying && (
         <p className={styles.retrying} role="status">
-          The answer was not backed by the evidence gathered. Looking again…
+          Rechecking the draft against the library…
         </p>
       )}
 
@@ -260,6 +308,10 @@ function AssistantBody({ turn }: { turn: ChatTurn }) {
 
 export function ChatThread({ turns }: ChatThreadProps) {
   const endRef = useRef<HTMLDivElement>(null);
+  const [openTraces, setOpenTraces] = useState<Record<number, boolean>>({});
+  const [openSubagents, setOpenSubagents] = useState<Record<string, boolean>>(
+    {}
+  );
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' });
@@ -268,14 +320,97 @@ export function ChatThread({ turns }: ChatThreadProps) {
   return (
     <div className={styles.thread}>
       <div className={styles.column}>
-        {turns.map((turn, index) => (
-          <article key={index} className={styles.exchange} aria-label="Chat turn">
-            <div className={styles.userRow}>
-              <p className={styles.userBubble}>{turn.question}</p>
-            </div>
-            <AssistantBody turn={turn} />
-          </article>
-        ))}
+        {turns.length === 0 && (
+          <p className={styles.empty}>
+            Ask in your own words, or attach a file with the plus button. The
+            file is filed as a paper, note, or document from its contents and
+            your message.
+          </p>
+        )}
+        {turns.map((turn, index) => {
+          const isTraceOpen = openTraces[index] ?? turn.isRunning;
+          const mainSteps = turn.steps.filter(
+            (step) => step.agentId === MAIN_AGENT || !step.agentId
+          );
+          const hasTrace = mainSteps.length > 0 || turn.subagents.length > 0;
+          return (
+            <article
+              key={index}
+              className={styles.exchange}
+              aria-label="Chat turn"
+            >
+              <div className={styles.userRow}>
+                <div className={styles.userCluster}>
+                  {(turn.attachments ?? []).length > 0 && (
+                    <ul className={styles.attachmentList}>
+                      {(turn.attachments ?? []).map((item) => (
+                        <li
+                          key={`${item.kind}-${item.id}`}
+                          className={styles.attachment}
+                        >
+                          {attachmentLabel(item)}
+                          {item.status && item.status !== 'ready'
+                            ? ` · ${item.status}`
+                            : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className={styles.userBubble}>{turn.question}</p>
+                </div>
+              </div>
+              {hasTrace ? (
+                <div className={traceStyles.trace}>
+                  <button
+                    type="button"
+                    className={traceStyles.traceToggle}
+                    aria-expanded={isTraceOpen}
+                    onClick={() =>
+                      setOpenTraces((current) => ({
+                        ...current,
+                        [index]: !isTraceOpen,
+                      }))
+                    }
+                  >
+                    {isTraceOpen ? (
+                      <ChevronDown className={traceStyles.chevron} />
+                    ) : (
+                      <ChevronRight className={traceStyles.chevron} />
+                    )}
+                    {mainSteps.length} tool step
+                    {mainSteps.length === 1 ? '' : 's'}
+                    {turn.subagents.length > 0
+                      ? ` · ${turn.subagents.length} nested`
+                      : ''}
+                  </button>
+                  {isTraceOpen && (
+                    <>
+                      <CompactionNotices items={turn.compactions} />
+                      {mainSteps.length > 0 && <StepList steps={mainSteps} />}
+                      <NestedSubagents
+                        subagents={turn.subagents}
+                        openIds={openSubagents}
+                        onToggle={(id) =>
+                          setOpenSubagents((current) => ({
+                            ...current,
+                            [id]: !(current[id] ?? true),
+                          }))
+                        }
+                      />
+                    </>
+                  )}
+                </div>
+              ) : turn.isRunning ? (
+                <p className={traceStyles.working} role="status">
+                  Waiting for tools…
+                </p>
+              ) : turn.steps.length === 0 && turn.answer ? (
+                <p className={traceStyles.working}>No tools used</p>
+              ) : null}
+              <AssistantBody turn={turn} />
+            </article>
+          );
+        })}
         <div ref={endRef} />
       </div>
     </div>

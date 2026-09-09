@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from services.note_links import MAX_PAPERS_PER_NOTE, dedupe_paper_ids
 
@@ -209,6 +209,19 @@ class PaperStatus(str, Enum):
     failed = "failed"
 
 
+class DigestStatus(str, Enum):
+    pending = "pending"
+    ready = "ready"
+    failed = "failed"
+
+
+class PaperDigest(BaseModel):
+    problem: str = ""
+    method: str = ""
+    key_results: str = ""
+    limitations: str = ""
+
+
 class PaperUpdate(BaseModel):
     title: str | None = None
     authors: list[str] | None = None
@@ -223,6 +236,9 @@ class PaperResponse(BaseModel):
     authors: list[str]
     year: int | None = None
     abstract: str | None = None
+    summary: str | None = None
+    digest: PaperDigest = Field(default_factory=PaperDigest)
+    digest_status: DigestStatus = DigestStatus.pending
     source: str
     tags: list[str]
     original_filename: str
@@ -237,9 +253,29 @@ class PaperResponse(BaseModel):
 
 
 class LibraryUploadResponse(BaseModel):
-    kind: Literal["paper", "note"]
+    kind: Literal["paper", "note", "document"]
     paper: PaperResponse | None = None
     note: NoteResponse | None = None
+    document: "LibraryDocumentResponse | None" = None
+
+
+class LibraryDocumentUpdate(BaseModel):
+    title: str | None = None
+
+
+class LibraryDocumentResponse(BaseModel):
+    id: uuid.UUID
+    title: str
+    original_filename: str
+    mime_type: str | None = None
+    extracted_text: str | None = None
+    processing_status: PaperStatus
+    processing_error: str | None = None
+    chunk_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class PaperChunkResponse(BaseModel):
@@ -258,6 +294,7 @@ class CitationSourceType(str, Enum):
     paper = "paper"
     voice = "voice"
     handwritten = "handwritten"
+    document = "document"
     web = "web"
 
 
@@ -358,12 +395,24 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class ChatFiledAttachment(BaseModel):
+    kind: Literal["paper", "note", "document"]
+    id: uuid.UUID
+    title: str
+    filename: str
+    status: str
+    preview: str = ""
+
+
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     include_papers: bool = True
     include_voice_notes: bool = True
     include_handwritten_notes: bool = True
+    include_documents: bool = True
     top_k: int | None = Field(default=None, ge=1, le=16)
+    conversation_id: uuid.UUID | None = None
+    attachments: list[ChatFiledAttachment] = Field(default_factory=list)
 
     @field_validator("messages")
     @classmethod
@@ -372,9 +421,14 @@ class ChatRequest(BaseModel):
             raise ValueError("Send at least one message")
         if value[-1].role is not ChatRole.user:
             raise ValueError("The last message must come from the user")
-        if not value[-1].content.strip():
-            raise ValueError("Question cannot be empty")
         return value
+
+    @model_validator(mode="after")
+    def question_or_attachments(self) -> "ChatRequest":
+        last = self.messages[-1]
+        if last.content.strip() or self.attachments:
+            return self
+        raise ValueError("Question cannot be empty")
 
 
 class ChatEventType(str, Enum):
@@ -387,8 +441,36 @@ class ChatEventType(str, Enum):
     todo = "todo"
     subagent = "subagent"
     compact = "compact"
+    attachment = "attachment"
+    conversation = "conversation"
+    notice = "notice"
+    progress = "progress"
+    approval = "approval"
     done = "done"
     error = "error"
+
+
+class ConversationSummary(BaseModel):
+    id: uuid.UUID
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    turn_count: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class ConversationTurnResponse(BaseModel):
+    id: uuid.UUID
+    turn_index: int
+    payload: dict
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ConversationDetail(ConversationSummary):
+    turns: list[ConversationTurnResponse] = Field(default_factory=list)
 
 
 class TodoStatus(str, Enum):
@@ -434,13 +516,17 @@ class GateStatus(str, Enum):
 
     `unchecked` means the deterministic checks passed but the LLM reviewer was
     expected and could not be reached, so nobody looked at whether the prose
-    actually follows from the snippets.
+    actually follows from the snippets. `incomplete` means a distinct part of
+    the question was not answered. `impossible` means the library cannot
+    satisfy the request, so the loop stops instead of retrying.
     """
 
     supported = "supported"
     unsupported = "unsupported"
     unchecked = "unchecked"
     retrying = "retrying"
+    incomplete = "incomplete"
+    impossible = "impossible"
 
 
 class GateProblemKind(str, Enum):
@@ -449,6 +535,8 @@ class GateProblemKind(str, Enum):
     uncited_answer = "uncited_answer"
     unsupported_claim = "unsupported_claim"
     judge_unavailable = "judge_unavailable"
+    unaddressed_part = "unaddressed_part"
+    impossible = "impossible"
 
 
 class ChatGateProblem(BaseModel):

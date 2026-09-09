@@ -9,6 +9,8 @@ from services.agent.skills import (
     get_skill,
     list_skill_summaries,
     load_all_skills,
+    reload_skills,
+    skill_catalog,
 )
 from services.agent.tools import ToolContext, list_skills_tool, load_skill_tool
 
@@ -65,3 +67,52 @@ def test_custom_directory_is_scanned(tmp_path: Path):
     skills = load_all_skills(tmp_path)
     assert list(skills) == ["demo"]
     assert get_skill("demo", tmp_path).body == "Body here."
+
+
+def test_the_catalog_lists_names_and_descriptions_but_no_bodies():
+    """The prompt gets five lines; the bodies stay on disk until asked for."""
+    catalog = skill_catalog()
+
+    assert "cite-from-library" in catalog
+    assert "compare-papers" in catalog
+    assert "load_skill" in catalog
+    longest_body = max(len(skill.body) for skill in list_skill_summaries())
+    assert len(catalog) < longest_body
+
+
+def test_the_catalog_is_empty_when_nothing_is_installed(tmp_path: Path):
+    assert skill_catalog(tmp_path) == ""
+
+
+def test_the_default_directory_is_scanned_once(monkeypatch: pytest.MonkeyPatch):
+    """It used to be re-read on every list_skills and every load_skill."""
+    import services.agent.skills as skills_module
+
+    scans = {"count": 0}
+    real_scan = skills_module._scan
+
+    def counting_scan(root: Path):
+        scans["count"] += 1
+        return real_scan(root)
+
+    monkeypatch.setattr(skills_module, "_scan", counting_scan)
+    monkeypatch.setattr(skills_module, "_cache", None)
+
+    for _ in range(4):
+        load_all_skills()
+        skill_catalog()
+    assert scans["count"] == 1
+
+    reload_skills()
+    assert scans["count"] == 2
+
+
+def test_the_agent_prompt_carries_the_catalog():
+    """A skill the model cannot see is a skill it will not load."""
+    from services.agent.loop import AGENT_PROMPT
+
+    assert "Installed skills" not in AGENT_PROMPT
+
+    composed = f"{AGENT_PROMPT}\n\n{skill_catalog()}"
+    for skill in list_skill_summaries():
+        assert f"- {skill.name}: " in composed

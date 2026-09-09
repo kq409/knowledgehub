@@ -24,9 +24,49 @@
   justify-content: flex-end;
 }
 
+.userCluster {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  max-width: min(80%, 560px);
+}
+
+.attachmentList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+.attachment {
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.empty {
+  margin: auto 0;
+  padding: var(--space-8) var(--space-4);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  text-align: center;
+  line-height: 1.6;
+}
+
+.badge.document {
+  background: var(--color-accent-amber-bg);
+  color: var(--color-accent-amber-fg);
+}
+
 .userBubble {
   margin: 0;
-  max-width: min(80%, 560px);
+  width: 100%;
   padding: var(--space-3) var(--space-4);
   border-radius: 18px 18px 6px 18px;
   background: var(--color-primary);
@@ -65,8 +105,9 @@
 
 .retrying {
   margin: 0;
-  color: var(--color-accent-amber-fg);
+  color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
+  font-style: italic;
 }
 
 .answer {

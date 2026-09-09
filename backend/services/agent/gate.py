@@ -2,9 +2,10 @@
 
 Two layers, deliberately split by what each is good at. Deterministic checks
 always run and catch facts a model is bad at judging -- a citation number that
-was never handed out, an answer written without opening anything. When the main
-model runs in the cloud, a second LLM reads the answer against the snippets and
-judges whether the prose is really supported.
+was never handed out. When the main model runs in the cloud, a second LLM
+reads the answer against the snippets and judges whether the prose is really
+supported. A turn with no tools is allowed when the answer makes no library
+claims.
 
 The reviewer fails open. If it cannot be reached or cannot produce parseable
 JSON, the answer still goes out, marked as unchecked. A flaky reviewer must
@@ -30,6 +31,7 @@ from schemas import (
     GateProblemKind,
     GateStatus,
 )
+from services.agent.telemetry import log_warning
 
 PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "judge_prompt.txt"
 JUDGE_PROMPT = PROMPT_FILE.read_text().strip()
@@ -39,6 +41,7 @@ JUDGE_TEMPERATURE = 0.0
 JUDGE_ATTEMPTS = 2
 JUDGE_SNIPPET_CHARS = 700
 MAX_JUDGE_CLAIMS = 3
+MAX_REASON_CHARS = 240
 
 CITATION_PATTERN = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 
@@ -89,6 +92,13 @@ class GateVerdict:
         return not any(problem.hard for problem in self.problems)
 
     @property
+    def impossible(self) -> bool:
+        """The goal cannot be met from this library; do not retry."""
+        return any(
+            problem.kind is GateProblemKind.impossible for problem in self.problems
+        )
+
+    @property
     def reason(self) -> str:
         return " ".join(problem.detail for problem in self.problems)
 
@@ -97,12 +107,25 @@ class GateVerdict:
         issues = "\n".join(
             f"- {problem.detail}" for problem in self.problems if problem.hard
         )
+        leftover = [
+            problem.detail
+            for problem in self.problems
+            if problem.kind is GateProblemKind.unaddressed_part
+        ]
+        leftover_note = ""
+        if leftover:
+            leftover_note = (
+                "\nThe original question is not fully answered. Cover the "
+                "remaining parts before stopping.\n"
+            )
         return (
-            "Your draft answer did not pass the evidence check:\n"
-            f"{issues}\n\n"
-            "Fix this before answering again. Search or read what you need to "
-            "back up the claim, or drop the claim and say plainly that the "
-            "library does not cover it. Only cite numbers the tools gave you."
+            "Internal evidence check (not the researcher). Continue answering "
+            "the original question. Do not thank the user, narrate this retry, "
+            "or apologize for the checker.\n"
+            f"{issues}{leftover_note}\n"
+            "Search or read what you need to back up the claim, or drop the "
+            "claim and say plainly that the library does not cover it. Only "
+            "cite numbers the tools gave you."
         )
 
     def as_schema(self, status: GateStatus | None = None) -> ChatVerdict:
@@ -163,7 +186,13 @@ def gate_mode_from_env(raw: str | None = None) -> GateMode:
 def check_deterministic(
     answer: str, registered: set[int], tool_calls_made: int
 ) -> list[GateProblem]:
-    """Checks that need no model: cited numbers exist, something was read."""
+    """Checks that need no model: cited numbers exist.
+
+    A turn with zero tools is allowed when the answer makes no library claims.
+    Fabricated [n] citations are still a hard failure. `tool_calls_made` is
+    kept so callers can skip the reviewer on a zero-tool, uncited reply.
+    """
+    del tool_calls_made
     problems: list[GateProblem] = []
     cited = extract_citation_indices(answer)
 
@@ -181,17 +210,6 @@ def check_deterministic(
                 detail=(
                     f"The answer cites {numbers}, but no tool ever returned "
                     f"that evidence. Numbers actually registered: {available}."
-                ),
-            )
-        )
-
-    if tool_calls_made == 0:
-        problems.append(
-            GateProblem(
-                kind=GateProblemKind.no_evidence_gathered,
-                detail=(
-                    "The answer was written without a single tool call, so "
-                    "nothing in it comes from the library."
                 ),
             )
         )
@@ -258,8 +276,10 @@ class EvidenceGate:
     ) -> GateVerdict:
         registered = {citation.index for citation in citations}
         problems = check_deterministic(answer, registered, tool_calls_made)
+        cited = extract_citation_indices(answer)
+        skip_reviewer = tool_calls_made == 0 and not cited and not registered
 
-        if not self.uses_judge():
+        if not self.uses_judge() or skip_reviewer:
             return GateVerdict(
                 status=_status_for(problems),
                 checked_by=CHECKED_BY_DETERMINISTIC,
@@ -334,15 +354,22 @@ class EvidenceGate:
                                 "type": "array",
                                 "items": {"type": "string"},
                             },
+                            "unaddressed_parts": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "impossible": {"type": "boolean"},
                         },
-                        "required": ["verdict"],
+                        "required": ["verdict", "reason", "unsupported_claims"],
                     },
                     temperature=JUDGE_TEMPERATURE,
                     max_tokens=JUDGE_MAX_TOKENS,
                     effort=effort,
                 )
             except (json.JSONDecodeError, ValueError) as exc:
-                print(f"⚠️  Evidence reviewer attempt {attempt + 1} failed: {exc}")
+                log_warning(
+                    "gate_reviewer_bad_json", attempt=attempt + 1, error=str(exc)
+                )
                 messages.append(
                     {
                         "role": "user",
@@ -354,13 +381,15 @@ class EvidenceGate:
                 )
                 continue
             except Exception as exc:  # noqa: BLE001 - reviewer must fail open
-                print(f"⚠️  Evidence reviewer unreachable: {exc}")
+                log_warning("gate_reviewer_unreachable", error=str(exc))
                 return None
 
             try:
                 return _problems_from_payload(payload)
             except ValueError as exc:
-                print(f"⚠️  Evidence reviewer attempt {attempt + 1} failed: {exc}")
+                log_warning(
+                    "gate_reviewer_bad_payload", attempt=attempt + 1, error=str(exc)
+                )
                 messages.append(
                     {
                         "role": "user",
@@ -394,28 +423,78 @@ class EvidenceGate:
 
 
 def _status_for(problems: list[GateProblem]) -> GateStatus:
+    if any(problem.kind is GateProblemKind.impossible for problem in problems):
+        return GateStatus.impossible
+    if any(problem.kind is GateProblemKind.unaddressed_part for problem in problems):
+        return GateStatus.incomplete
     if any(problem.hard for problem in problems):
         return GateStatus.unsupported
     return GateStatus.supported
+
+
+def _short_reason(reason: str) -> str:
+    """Keep judge prose to one short sentence so CoT never reaches the UI."""
+    text = " ".join((reason or "").split())
+    if not text:
+        return ""
+    for separator in (". ", "? ", "! ", "。", "？", "！"):
+        index = text.find(separator)
+        if index != -1:
+            text = text[: index + len(separator)].rstrip()
+            break
+    if len(text) > MAX_REASON_CHARS:
+        return text[: MAX_REASON_CHARS - 1].rstrip() + "…"
+    return text
 
 
 def _problems_from_payload(payload: dict) -> list[GateProblem]:
     verdict = str(payload.get("verdict", "")).strip().lower()
     if verdict not in {"supported", "unsupported"}:
         raise ValueError(f"Unknown verdict {verdict!r}")
-    if verdict == "supported":
-        return []
 
+    problems: list[GateProblem] = []
     reason = str(payload.get("reason", "")).strip()
-    raw_claims = payload.get("unsupported_claims") or []
-    if not isinstance(raw_claims, list):
-        raise ValueError("unsupported_claims must be a list")
 
-    claims = [str(claim).strip() for claim in raw_claims if str(claim).strip()]
-    detail = reason or "The reviewer found claims the evidence does not support."
-    if claims:
-        quoted = "; ".join(f"“{claim}”" for claim in claims[:MAX_JUDGE_CLAIMS])
-        detail = f"{detail} Unsupported: {quoted}."
-    return [
-        GateProblem(kind=GateProblemKind.unsupported_claim, detail=detail),
-    ]
+    if bool(payload.get("impossible")):
+        detail = (
+            _short_reason(reason)
+            or "This request cannot be completed from the evidence available."
+        )
+        problems.append(GateProblem(kind=GateProblemKind.impossible, detail=detail))
+
+    raw_leftover = payload.get("unaddressed_parts") or []
+    if raw_leftover and not isinstance(raw_leftover, list):
+        raise ValueError("unaddressed_parts must be a list")
+    leftover = [str(part).strip() for part in raw_leftover if str(part).strip()]
+    if leftover and not any(
+        problem.kind is GateProblemKind.impossible for problem in problems
+    ):
+        quoted = "; ".join(f"“{part}”" for part in leftover[:MAX_JUDGE_CLAIMS])
+        problems.append(
+            GateProblem(
+                kind=GateProblemKind.unaddressed_part,
+                detail=f"The answer does not cover: {quoted}.",
+            )
+        )
+
+    if verdict == "unsupported":
+        raw_claims = payload.get("unsupported_claims") or []
+        if not isinstance(raw_claims, list):
+            raise ValueError("unsupported_claims must be a list")
+        claims = [str(claim).strip() for claim in raw_claims if str(claim).strip()]
+        # A thinking model often marks unsupported while walking every claim
+        # back and leaving unsupported_claims empty. That is not a real finding.
+        if claims:
+            detail = (
+                _short_reason(reason)
+                or "The reviewer found claims the evidence does not support."
+            )
+            quoted = "; ".join(f"“{claim}”" for claim in claims[:MAX_JUDGE_CLAIMS])
+            problems.append(
+                GateProblem(
+                    kind=GateProblemKind.unsupported_claim,
+                    detail=f"{detail} Unsupported: {quoted}.",
+                )
+            )
+
+    return problems

@@ -7,6 +7,8 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
+    LibraryDocument,
+    LibraryDocumentChunk,
     Note,
     NoteChunk,
     NotePaper,
@@ -83,6 +85,9 @@ class LibraryPaperRow:
     authors: list[str]
     processing_status: str
     chunk_count: int
+    abstract: str | None = None
+    summary: str | None = None
+    digest: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,15 @@ class LibraryNoteRow:
     review_status: str
     paper_ids: tuple[uuid.UUID, ...]
     linked_titles: tuple[str, ...]
+    processing_status: str
+    chunk_count: int
+
+
+@dataclass(frozen=True)
+class LibraryDocumentRow:
+    id: uuid.UUID
+    title: str
+    original_filename: str
     processing_status: str
     chunk_count: int
 
@@ -237,6 +251,9 @@ async def list_library_papers(session: AsyncSession) -> list[LibraryPaperRow]:
             Paper.authors,
             Paper.processing_status,
             chunk_count,
+            Paper.abstract,
+            Paper.summary,
+            Paper.digest,
         ).order_by(Paper.created_at.asc())
     )
     return [
@@ -247,8 +264,21 @@ async def list_library_papers(session: AsyncSession) -> list[LibraryPaperRow]:
             authors=list(authors or []),
             processing_status=status,
             chunk_count=count,
+            abstract=abstract,
+            summary=summary,
+            digest=dict(digest or {}) if digest else {},
         )
-        for paper_id, title, year, authors, status, count in result.all()
+        for (
+            paper_id,
+            title,
+            year,
+            authors,
+            status,
+            count,
+            abstract,
+            summary,
+            digest,
+        ) in result.all()
     ]
 
 
@@ -301,6 +331,34 @@ async def list_library_notes(
     ]
 
 
+async def list_library_documents(session: AsyncSession) -> list[LibraryDocumentRow]:
+    chunk_count = (
+        select(func.count(LibraryDocumentChunk.id))
+        .where(LibraryDocumentChunk.document_id == LibraryDocument.id)
+        .correlate(LibraryDocument)
+        .scalar_subquery()
+    )
+    result = await session.execute(
+        select(
+            LibraryDocument.id,
+            LibraryDocument.title,
+            LibraryDocument.original_filename,
+            LibraryDocument.processing_status,
+            chunk_count,
+        ).order_by(LibraryDocument.created_at.asc())
+    )
+    return [
+        LibraryDocumentRow(
+            id=document_id,
+            title=title,
+            original_filename=filename,
+            processing_status=status,
+            chunk_count=count,
+        )
+        for document_id, title, filename, status, count in result.all()
+    ]
+
+
 def clamp_read_limit(limit: int | None) -> int:
     if limit is None:
         return DEFAULT_READ_CHUNKS
@@ -343,6 +401,42 @@ async def read_paper_chunks(
     return PaperChunkPage(chunks=chunks, total=int(total or 0), start_index=start)
 
 
+async def read_document_chunks(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    *,
+    start_index: int = 0,
+    limit: int | None = None,
+) -> PaperChunkPage:
+    start = max(0, start_index)
+    window = clamp_read_limit(limit)
+    total = await session.scalar(
+        select(func.count(LibraryDocumentChunk.id)).where(
+            LibraryDocumentChunk.document_id == document_id
+        )
+    )
+    result = await session.execute(
+        select(LibraryDocumentChunk)
+        .where(
+            LibraryDocumentChunk.document_id == document_id,
+            LibraryDocumentChunk.chunk_index >= start,
+        )
+        .order_by(LibraryDocumentChunk.chunk_index)
+        .limit(window)
+    )
+    chunks = [
+        DocumentChunk(
+            chunk_id=chunk.id,
+            chunk_index=chunk.chunk_index,
+            text=chunk.text,
+            page=chunk.page,
+            section=chunk.section,
+        )
+        for chunk in result.scalars().all()
+    ]
+    return PaperChunkPage(chunks=chunks, total=int(total or 0), start_index=start)
+
+
 async def search(
     session: AsyncSession,
     query_embedding: list[float],
@@ -351,6 +445,7 @@ async def search(
     include_papers: bool = True,
     include_voice_notes: bool = True,
     include_handwritten_notes: bool = True,
+    include_documents: bool = True,
     top_k: int = DEFAULT_TOP_K,
     paper_ids: list[uuid.UUID] | None = None,
     expand_links: bool = True,
@@ -362,6 +457,8 @@ async def search(
         dense.extend(
             await _search_papers(session, query_embedding, pool, paper_ids=paper_ids)
         )
+    if include_documents and paper_ids is None:
+        dense.extend(await _search_documents(session, query_embedding, pool))
     dense.extend(
         await _search_notes(
             session,
@@ -383,6 +480,7 @@ async def search(
             include_papers=include_papers,
             include_voice_notes=include_voice_notes,
             include_handwritten_notes=include_handwritten_notes,
+            include_documents=include_documents,
             top_k=pool,
             paper_ids=paper_ids,
         )
@@ -558,6 +656,7 @@ async def _lexical_search(
     include_papers: bool,
     include_voice_notes: bool,
     include_handwritten_notes: bool,
+    include_documents: bool = True,
     top_k: int,
     paper_ids: list[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
@@ -569,6 +668,8 @@ async def _lexical_search(
                     session, query_text, top_k, paper_ids=paper_ids
                 )
             )
+        if include_documents and paper_ids is None:
+            hits.extend(await _lexical_search_documents(session, query_text, top_k))
         hits.extend(
             await _lexical_search_notes(
                 session,
@@ -727,6 +828,77 @@ async def _search_papers(
     ]
 
 
+async def _search_documents(
+    session: AsyncSession,
+    query_embedding: list[float],
+    top_k: int,
+) -> list[RetrievalHit]:
+    distance = LibraryDocumentChunk.embedding.cosine_distance(query_embedding)
+    result = await session.execute(
+        select(LibraryDocumentChunk, LibraryDocument, distance.label("distance"))
+        .join(LibraryDocument, LibraryDocument.id == LibraryDocumentChunk.document_id)
+        .where(
+            LibraryDocumentChunk.embedding.is_not(None),
+            LibraryDocument.processing_status == ProcessingStatus.ready.value,
+        )
+        .order_by(distance)
+        .limit(top_k)
+    )
+    return [
+        RetrievalHit(
+            source_type="document",
+            source_id=document.id,
+            chunk_id=chunk.id,
+            title=document.title,
+            page=chunk.page,
+            section=chunk.section,
+            text=chunk.text,
+            similarity=similarity_from_distance(dist),
+            year=None,
+        )
+        for chunk, document, dist in result.all()
+    ]
+
+
+async def _lexical_search_documents(
+    session: AsyncSession,
+    query_text: str,
+    top_k: int,
+) -> list[RetrievalHit]:
+    tsquery = func.plainto_tsquery("simple", query_text)
+    chunk_tsv = LibraryDocumentChunk.tsv
+    rank = func.ts_rank_cd(chunk_tsv, tsquery) + _title_boost(
+        LibraryDocument.title, query_text
+    )
+    result = await session.execute(
+        select(LibraryDocumentChunk, LibraryDocument, rank.label("lex_rank"))
+        .join(LibraryDocument, LibraryDocument.id == LibraryDocumentChunk.document_id)
+        .where(
+            LibraryDocument.processing_status == ProcessingStatus.ready.value,
+            _lexical_match_clauses(
+                query_text, chunk_tsv, LibraryDocumentChunk.text, LibraryDocument.title
+            ),
+        )
+        .order_by(rank.desc(), LibraryDocumentChunk.chunk_index.asc())
+        .limit(top_k)
+    )
+    return [
+        RetrievalHit(
+            source_type="document",
+            source_id=document.id,
+            chunk_id=chunk.id,
+            title=document.title,
+            page=chunk.page,
+            section=chunk.section,
+            text=chunk.text,
+            similarity=0.0,
+            year=None,
+            rank_score=round(float(lex_rank or 0.0), 6),
+        )
+        for chunk, document, lex_rank in result.all()
+    ]
+
+
 async def _search_notes(
     session: AsyncSession,
     query_embedding: list[float],
@@ -786,13 +958,15 @@ async def _search_notes(
 async def _annotate_linked_titles(
     session: AsyncSession, hits: list[RetrievalHit]
 ) -> list[RetrievalHit]:
-    note_ids = [hit.source_id for hit in hits if hit.source_type != "paper"]
+    note_ids = [
+        hit.source_id for hit in hits if hit.source_type in ("voice", "handwritten")
+    ]
     if not note_ids:
         return hits
     titles_by_note = await linked_titles_for_notes(session, note_ids)
     annotated: list[RetrievalHit] = []
     for hit in hits:
-        if hit.source_type == "paper":
+        if hit.source_type not in ("voice", "handwritten"):
             annotated.append(hit)
             continue
         annotated.append(
@@ -815,7 +989,11 @@ async def expand_linked_evidence(
     seen = {hit.chunk_id for hit in annotated}
     extras: list[RetrievalHit] = []
 
-    note_ids = [hit.source_id for hit in annotated if hit.source_type != "paper"]
+    note_ids = [
+        hit.source_id
+        for hit in annotated
+        if hit.source_type in ("voice", "handwritten")
+    ]
     paper_ids = [hit.source_id for hit in annotated if hit.source_type == "paper"]
 
     if include_papers and note_ids:

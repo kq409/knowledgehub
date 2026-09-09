@@ -110,7 +110,12 @@ export function VoiceNoteCard({
       }
     }, 2500);
     return () => window.clearInterval(timer);
-  }, [note.id, note.processing_status, note.related_generated_at, note.updated_at]);
+  }, [
+    note.id,
+    note.processing_status,
+    note.related_generated_at,
+    note.updated_at,
+  ]);
 
   const updateField = <K extends keyof VoiceNoteCardProps['note']>(
     key: K,
@@ -189,7 +194,10 @@ export function VoiceNoteCard({
           {papers.length === 0 ? (
             <p className={styles.hint}>No papers in the library yet.</p>
           ) : (
-            <ul className={styles.checkList} aria-labelledby="voice-note-papers-label">
+            <ul
+              className={styles.checkList}
+              aria-labelledby="voice-note-papers-label"
+            >
               {papers.map((paper) => (
                 <li key={paper.id}>
                   <label className={styles.checkItem}>

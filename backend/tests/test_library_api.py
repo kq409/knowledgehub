@@ -96,7 +96,7 @@ async def wait_until_ready(client: AsyncClient, kind: str, item_id: str) -> dict
 
 async def test_library_upload_classifies_as_paper(client: AsyncClient):
     files = {"file": ("sample.pdf", b"%PDF-1.4\n%mock paper\n", "application/pdf")}
-    with patch("routers.library.classify_pdf", return_value="paper"):
+    with patch("routers.library.classify_attachment", return_value="paper"):
         created = await client.post("/api/library/upload", files=files)
     assert created.status_code == 202
     payload = created.json()
@@ -119,7 +119,7 @@ async def test_library_upload_classifies_as_paper(client: AsyncClient):
 
 async def test_library_upload_classifies_as_note(client: AsyncClient):
     files = {"file": ("lab-notes.pdf", b"%PDF-1.4\n%mock note\n", "application/pdf")}
-    with patch("routers.library.classify_pdf", return_value="note"):
+    with patch("routers.library.classify_attachment", return_value="note"):
         created = await client.post("/api/library/upload", files=files)
     assert created.status_code == 202
     payload = created.json()

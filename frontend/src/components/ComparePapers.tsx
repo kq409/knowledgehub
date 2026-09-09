@@ -208,7 +208,9 @@ export function ComparePapers() {
   const deleteHistoryItem = useCallback(
     async (id: string) => {
       try {
-        const response = await fetch(`/api/compare/${id}`, { method: 'DELETE' });
+        const response = await fetch(`/api/compare/${id}`, {
+          method: 'DELETE',
+        });
         if (!response.ok) {
           throw new Error(await readErrorDetail(response));
         }
@@ -234,14 +236,15 @@ export function ComparePapers() {
         <fieldset className={styles.sources} disabled={isComparing}>
           <legend className={styles.legend}>Papers</legend>
           {papers.length === 0 ? (
-            <p className={styles.empty}>No papers yet. Upload PDFs in Paper Library.</p>
+            <p className={styles.empty}>
+              No papers yet. Upload PDFs in Paper Library.
+            </p>
           ) : (
             <ul className={styles.paperList}>
               {papers.map((paper) => {
                 const ready = paper.processing_status === 'ready';
                 const checked = selectedIds.includes(paper.id);
-                const atCap =
-                  !checked && selectedIds.length >= MAX_PAPERS;
+                const atCap = !checked && selectedIds.length >= MAX_PAPERS;
                 const linked = notesByPaper.get(paper.id) ?? [];
                 return (
                   <li key={paper.id}>

@@ -25,7 +25,11 @@ function getSpeechRecognition(): SpeechRecognitionCtor | null {
     SpeechRecognition?: SpeechRecognitionCtor;
     webkitSpeechRecognition?: SpeechRecognitionCtor;
   };
-  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
+  return (
+    speechWindow.SpeechRecognition ??
+    speechWindow.webkitSpeechRecognition ??
+    null
+  );
 }
 
 function joinTranscript(...parts: string[]): string {
@@ -51,7 +55,8 @@ export function useSpeechToComposer(
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const supportsLive = typeof window !== 'undefined' && getSpeechRecognition() != null;
+  const supportsLive =
+    typeof window !== 'undefined' && getSpeechRecognition() != null;
 
   const stopLive = useCallback(() => {
     recognitionRef.current?.stop();

@@ -132,7 +132,7 @@ async def post(app: FastAPI, payload: dict):
 async def test_streams_tool_steps_answer_and_citations(seeded_paper: Paper):
     app = build_app(
         scripted_llm(
-            '{"tool": "search_library", "input": {"query": "hybrid retrieval"}}',
+            '{"tools": [{"name": "search_library", "input": {"query": "hybrid retrieval"}}]}',
             "Hybrid retrieval combines dense and sparse search [1].",
         )
     )
@@ -144,7 +144,9 @@ async def test_streams_tool_steps_answer_and_citations(seeded_paper: Paper):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = parse_sse(response.text)
-    assert [event["type"] for event in events] == [
+    assert events[0]["type"] == "conversation"
+    assert "id" in events[0]
+    assert [event["type"] for event in events[1:]] == [
         "tool_call",
         "tool_result",
         "token",
@@ -152,22 +154,22 @@ async def test_streams_tool_steps_answer_and_citations(seeded_paper: Paper):
         "verdict",
         "done",
     ]
-    assert events[0]["name"] == "search_library"
-    assert "result(s)" in events[1]["summary"]
-    assert events[1]["permission"]["decision"] == "allow"
-    assert events[2]["text"].startswith("Hybrid retrieval")
-    assert events[3]["citations"][0]["source_id"] == str(seeded_paper.id)
-    assert events[4]["status"] == "supported"
-    assert events[4]["checked_by"] == "deterministic"
-    assert events[5]["model"] == MODEL
+    assert events[1]["name"] == "search_library"
+    assert "result(s)" in events[2]["summary"]
+    assert events[2]["permission"]["decision"] == "allow"
+    assert events[3]["text"].startswith("Hybrid retrieval")
+    assert events[4]["citations"][0]["source_id"] == str(seeded_paper.id)
+    assert events[5]["status"] == "supported"
+    assert events[5]["checked_by"] == "deterministic"
+    assert events[6]["model"] == MODEL
 
 
 async def test_an_unsupported_answer_reaches_the_client(seeded_paper: Paper):
     app = build_app(
         scripted_llm(
-            '{"tool": "list_papers", "input": {}}',
-            "Hybrid retrieval is settled science [1].",
-            "Hybrid retrieval is settled science [1].",
+            '{"tools": [{"name": "list_papers", "input": {}}]}',
+            "Hybrid retrieval is settled science [99].",
+            "Hybrid retrieval is settled science [99].",
         )
     )
 
@@ -179,7 +181,7 @@ async def test_an_unsupported_answer_reaches_the_client(seeded_paper: Paper):
     verdicts = [event for event in events if event["type"] == "verdict"]
     assert [verdict["status"] for verdict in verdicts] == ["retrying", "unsupported"]
     assert verdicts[1]["problems"][0]["kind"] == "fabricated_citation"
-    assert "[1]" in verdicts[1]["reason"]
+    assert "[99]" in verdicts[1]["reason"]
 
 
 async def test_a_comparison_artifact_survives_the_sse_stream(seeded_paper: Paper):
@@ -212,11 +214,11 @@ async def test_a_comparison_artifact_survives_the_sse_stream(seeded_paper: Paper
     compare.compare = AsyncMock(return_value=response)
     app = build_app(
         scripted_llm(
-            '{"tool": "compare_papers", "input": {"paper_ids": ["'
+            '{"tools": [{"name": "compare_papers", "input": {"paper_ids": ["'
             + str(seeded_paper.id)
             + '", "'
             + str(other_id)
-            + '"]}}',
+            + '"]}}]}',
             "They differ on how retrieval is done.",
             "They differ on how retrieval is done.",
         ),
@@ -241,7 +243,7 @@ async def test_a_comparison_artifact_survives_the_sse_stream(seeded_paper: Paper
 async def test_a_workspace_artifact_survives_the_sse_stream(seeded_paper: Paper):
     app = build_app(
         scripted_llm(
-            '{"tool": "present_workspace", "input": {"module": "voice_notes"}}',
+            '{"tools": [{"name": "present_workspace", "input": {"module": "voice_notes"}}]}',
             "The recorder is open — go ahead when you are ready.",
             "The recorder is open — go ahead when you are ready.",
         )
@@ -288,6 +290,7 @@ async def test_rejects_a_request_with_no_sources(seeded_paper: Paper):
             "include_papers": False,
             "include_voice_notes": False,
             "include_handwritten_notes": False,
+            "include_documents": False,
         },
     )
     assert response.status_code == 400

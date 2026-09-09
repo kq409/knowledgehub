@@ -13,6 +13,9 @@ def test_chat_suite_has_enough_tasks_and_trials():
     ids = {task["id"] for task in suite["tasks"]}
     assert "grounded-ella-transfer" in ids
     assert "abstain-sota" in ids
+    assert "greeting-no-inventory" in ids
+    assert "multi-part-compare-then-gap" in ids
+    assert "skill-cite-from-library" in ids
 
 
 def test_chat_graders_on_fake_transcript():

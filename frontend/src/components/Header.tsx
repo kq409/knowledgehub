@@ -56,7 +56,11 @@ export function Header({ onOpenEval }: { onOpenEval?: () => void }) {
           )}
         </button>
         {settingsOpen && (
-          <div className={styles.settingsPanel} role="dialog" aria-label="Settings">
+          <div
+            className={styles.settingsPanel}
+            role="dialog"
+            aria-label="Settings"
+          >
             <MemoryPanel />
           </div>
         )}

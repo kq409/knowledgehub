@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from services.document_classifier import classify_pdf, classify_text
+from services.document_classifier import (
+    classify_attachment,
+    classify_pdf,
+    classify_text,
+    prompt_kind,
+)
 from tests.test_note_parser import build_simple_pdf
 
 PAPER_SAMPLE = """
@@ -94,3 +99,64 @@ def test_classify_pdf_reads_note_like_text(tmp_path: Path):
     pdf_path.write_bytes(build_simple_pdf("I think these are my notes TODO"))
     assert classify_pdf(pdf_path) == "note"
     assert classify_pdf(pdf_path.read_bytes()) == "note"
+
+
+def test_classify_attachment_csv_is_document():
+    kind = classify_attachment(
+        filename="results.csv",
+        content=b"col_a,col_b\n1,2\n",
+        content_type="text/csv",
+        prompt="",
+    )
+    assert kind == "document"
+
+
+def test_classify_attachment_markdown_is_document():
+    kind = classify_attachment(
+        filename="readme.md",
+        content=b"# Notes\nNot a paper.\n",
+        content_type="text/markdown",
+    )
+    assert kind == "document"
+
+
+def test_prompt_kind_overrides():
+    assert prompt_kind("Please file this as a paper") == "paper"
+    assert prompt_kind("这是我的笔记") == "note"
+    assert prompt_kind("这是实验表格") == "document"
+
+
+def test_prompt_can_file_pdf_as_note(tmp_path: Path):
+    content = build_simple_pdf(PAPER_SAMPLE)
+    kind = classify_attachment(
+        filename="survey.pdf",
+        content=content,
+        content_type="application/pdf",
+        prompt="这是我的笔记",
+    )
+    assert kind == "note"
+
+
+def test_prompt_conflict_uses_llm_when_provided():
+    kind = classify_attachment(
+        filename="survey.pdf",
+        content=build_simple_pdf(PAPER_SAMPLE),
+        content_type="application/pdf",
+        prompt="这是我的笔记",
+        llm_classify=lambda _payload: "document",
+    )
+    assert kind == "document"
+
+
+def test_llm_failure_falls_back_to_prompt_override():
+    def boom(_payload: str):
+        raise RuntimeError("offline")
+
+    kind = classify_attachment(
+        filename="survey.pdf",
+        content=build_simple_pdf(PAPER_SAMPLE),
+        content_type="application/pdf",
+        prompt="这是我的笔记",
+        llm_classify=boom,
+    )
+    assert kind == "note"

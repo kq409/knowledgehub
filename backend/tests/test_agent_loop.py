@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import uuid
@@ -28,7 +29,7 @@ from schemas import (
 )
 from services.agent.loop import (
     MAX_ITERATIONS,
-    MAX_TOOL_CALLS_PER_TURN,
+    MAX_TOOL_CALLS_PER_RESPONSE,
     MAX_TOOL_RESULT_CHARS,
     PROMPT_VERSION,
     AgentEvent,
@@ -57,10 +58,11 @@ def unit(index: int) -> list[float]:
     return vector
 
 
-def reply(content: str) -> MagicMock:
-    return MagicMock(
-        choices=[MagicMock(message=MagicMock(content=content, tool_calls=None))]
-    )
+def reply(content: str, *, reasoning: str | None = None) -> MagicMock:
+    message_kwargs: dict = {"content": content, "tool_calls": None}
+    if reasoning is not None:
+        message_kwargs["reasoning_content"] = reasoning
+    return MagicMock(choices=[MagicMock(message=MagicMock(**message_kwargs))])
 
 
 def scripted_llm(*replies: str) -> MagicMock:
@@ -68,6 +70,18 @@ def scripted_llm(*replies: str) -> MagicMock:
     client = MagicMock()
     client.chat.completions.create.side_effect = [reply(item) for item in replies]
     return client
+
+
+def planned(*calls: tuple[str, dict] | str) -> str:
+    """JSON the tool planner is expected to return."""
+    tools = []
+    for item in calls:
+        if isinstance(item, str):
+            tools.append({"name": item, "input": {}})
+        else:
+            name, arguments = item
+            tools.append({"name": name, "input": arguments})
+    return json.dumps({"tools": tools})
 
 
 def text_protocol_agent(
@@ -192,12 +206,13 @@ async def library() -> AsyncGenerator[Library, None]:
 
 async def test_native_parallel_tool_calls_all_get_results(library: Library):
     """DeepSeek 400s if an assistant tool_calls block is missing any tool result."""
-    extra_calls = MAX_TOOL_CALLS_PER_TURN + 1
+    extra_calls = MAX_TOOL_CALLS_PER_RESPONSE + 1
     parallel = native_parallel_completion(
         *[("list_papers", {}) for _ in range(extra_calls)]
     )
     client = MagicMock()
     client.chat.completions.create.side_effect = [
+        reply(planned("list_papers")),
         parallel,
         reply("Your library holds 1 paper from 2006."),
     ]
@@ -208,22 +223,23 @@ async def test_native_parallel_tool_calls_all_get_results(library: Library):
         async for event in agent.run(library.session, ask("What is in the library?"))
     ]
 
-    second_messages = client.chat.completions.create.call_args_list[1].kwargs[
+    answer_messages = client.chat.completions.create.call_args_list[2].kwargs[
         "messages"
     ]
-    assistant = next(
-        message for message in second_messages if message.get("tool_calls")
-    )
-    call_ids = [call["id"] for call in assistant["tool_calls"]]
+    parallel_assistant = [
+        message for message in answer_messages if message.get("tool_calls")
+    ][-1]
+    call_ids = [call["id"] for call in parallel_assistant["tool_calls"]]
     tool_messages = [
-        message for message in second_messages if message.get("role") == "tool"
+        message for message in answer_messages if message.get("role") == "tool"
     ]
+    parallel_results = tool_messages[-extra_calls:]
     assert call_ids == [f"call_{i}" for i in range(1, extra_calls + 1)]
-    assert [message["tool_call_id"] for message in tool_messages] == call_ids
-    assert any("tool budget" in message["content"] for message in tool_messages)
+    assert [message["tool_call_id"] for message in parallel_results] == call_ids
+    assert any("tool budget" in message["content"] for message in parallel_results)
     assert [data["name"] for data in events_of(events, ChatEventType.tool_call)] == [
         "list_papers"
-    ] * extra_calls
+    ] * (extra_calls + 1)
     skipped = [
         data
         for data in events_of(events, ChatEventType.tool_result)
@@ -233,9 +249,150 @@ async def test_native_parallel_tool_calls_all_get_results(library: Library):
     assert skipped[0]["permission"]["decision"] == "skip"
 
 
+async def test_concurrent_turns_do_not_swap_tool_results(library: Library):
+    """One `ResearchAgent` serves every request, so per-turn state cannot live on it.
+
+    The two turns are forced to sit inside tool execution at the same moment,
+    which is where an instance attribute would let the second turn overwrite
+    what the first is about to read.
+    """
+    if db.SessionLocal is None:
+        pytest.skip("Database session factory was not created")
+
+    both_inside = asyncio.Barrier(2)
+
+    async def tagged_list(ctx: ToolContext, **_: object) -> ToolResult:
+        # top_k is the only per-request value the handler can see, so each turn
+        # sends a different one and reads its own back.
+        await both_inside.wait()
+        return ToolResult(
+            content=f"library for turn {ctx.top_k}",
+            summary=f"listed for turn {ctx.top_k}",
+        )
+
+    def create(**kwargs):
+        blob = json.dumps(kwargs.get("messages") or [])
+        if "response_format" in kwargs:
+            return reply(planned("list_papers"))
+        return reply("ALPHA" if "ALPHA" in blob else "BRAVO")
+
+    client = MagicMock()
+    client.chat.completions.create.side_effect = create
+    agent = text_protocol_agent(client)
+
+    async def turn(question: str, top_k: int) -> list[AgentEvent]:
+        payload = ChatRequest(
+            messages=[ChatMessage(role=ChatRole.user, content=question)],
+            top_k=top_k,
+        )
+        async with db.SessionLocal() as session:
+            return [event async for event in agent.run(session, payload)]
+
+    with patch.dict(TOOL_HANDLERS, {"list_papers": tagged_list}):
+        alpha, bravo = await asyncio.gather(
+            turn("ALPHA question", 1), turn("BRAVO question", 2)
+        )
+
+    assert events_of(alpha, ChatEventType.tool_result)[0]["summary"] == (
+        "listed for turn 1"
+    )
+    assert events_of(bravo, ChatEventType.tool_result)[0]["summary"] == (
+        "listed for turn 2"
+    )
+    assert events_of(alpha, ChatEventType.token)[0]["text"] == "ALPHA"
+    assert events_of(bravo, ChatEventType.token)[0]["text"] == "BRAVO"
+    assert alpha[-1].data["request_id"] != bravo[-1].data["request_id"]
+
+
+async def test_parallel_read_tools_run_concurrently(library: Library):
+    """Three independent reads should overlap, not queue behind each other."""
+    if db.SessionLocal is None:
+        pytest.skip("Database session factory was not created")
+
+    all_three = asyncio.Barrier(3)
+
+    async def gated_read(ctx: ToolContext, **_: object) -> ToolResult:
+        # Only reachable if all three calls are in flight at once; a serial
+        # runner would deadlock here and time out.
+        await asyncio.wait_for(all_three.wait(), timeout=5)
+        return ToolResult(content="ok", summary="read ok")
+
+    client = MagicMock()
+    client.chat.completions.create.side_effect = [
+        reply(planned("list_papers", "list_notes", "list_documents")),
+        reply("Your library holds 1 paper."),
+    ]
+    agent = native_protocol_agent(client)
+
+    handlers = {
+        "list_papers": gated_read,
+        "list_notes": gated_read,
+        "list_documents": gated_read,
+    }
+    async with db.SessionLocal() as session:
+        with patch.dict(TOOL_HANDLERS, handlers):
+            events = [event async for event in agent.run(session, ask("Overview?"))]
+
+    results = events_of(events, ChatEventType.tool_result)
+    assert [data["name"] for data in results] == [
+        "list_papers",
+        "list_notes",
+        "list_documents",
+    ]
+    assert all(data["permission"]["decision"] == "allow" for data in results)
+
+
+async def test_dsml_leaked_into_content_runs_as_tool_calls(library: Library):
+    """DeepSeek V4 sometimes writes DSML into content instead of tool_calls.
+
+    An empty planner result turns tools off for the answering turn; the leak
+    must still run, or the preamble is shipped as the whole answer.
+    """
+    dsml = (
+        "I'll pull up your library contents to give you an overview.\n\n"
+        "<｜｜DSML｜｜tool_calls>\n"
+        '<｜｜DSML｜｜invoke name="list_papers"/>\n'
+        '<｜｜DSML｜｜invoke name="list_notes"/>\n'
+        '<｜｜DSML｜｜invoke name="list_documents"/>\n'
+        "</｜｜DSML｜｜tool_calls>"
+    )
+    client = MagicMock()
+    client.chat.completions.create.side_effect = [
+        reply(planned()),
+        reply(dsml, reasoning="List papers, notes, and documents."),
+        reply("Your library holds 1 paper from 2006."),
+    ]
+    agent = native_protocol_agent(client)
+
+    events = [
+        event
+        async for event in agent.run(
+            library.session, ask("give me an overview on my Library")
+        )
+    ]
+
+    assert [data["name"] for data in events_of(events, ChatEventType.tool_call)] == [
+        "list_papers",
+        "list_notes",
+        "list_documents",
+    ]
+    answer = events_of(events, ChatEventType.token)[0]["text"]
+    assert "DSML" not in answer
+    assert "list_papers" not in answer
+    assert "I'll pull up" not in answer
+    assert "Your library holds 1 paper" in answer
+    follow_up = client.chat.completions.create.call_args_list[2].kwargs["messages"]
+    echoed = [
+        message
+        for message in follow_up
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    ]
+    assert echoed[-1]["reasoning_content"] == "List papers, notes, and documents."
+
+
 async def test_agent_runs_a_tool_then_answers(library: Library):
     client = scripted_llm(
-        '{"tool": "search_library", "input": {"query": "ELLA-FIXTURE-2006"}}',
+        planned(("search_library", {"query": "ELLA-FIXTURE-2006"})),
         "ELLA reports transfer across tasks [1].",
     )
     agent = text_protocol_agent(client)
@@ -257,7 +414,7 @@ async def test_tool_results_carry_citation_numbers_back_to_the_model(
     library: Library,
 ):
     client = scripted_llm(
-        '{"tool": "search_library", "input": {"query": "transfer"}}',
+        planned(("search_library", {"query": "transfer"})),
         "Answer [1].",
     )
     agent = text_protocol_agent(client)
@@ -281,7 +438,7 @@ async def test_field_wide_question_reaches_the_model_with_real_coverage(
     coverage-limited answer, which remains valid.
     """
     client = scripted_llm(
-        '{"tool": "list_papers", "input": {}}',
+        planned("list_papers"),
         "Your library holds 1 paper from 2006, which cannot settle a 2026 SOTA claim.",
     )
     agent = text_protocol_agent(client)
@@ -316,13 +473,13 @@ async def test_field_wide_question_uses_web_search(library: Library):
             ]
 
     client = scripted_llm(
-        '{"tool": "web_search", "input": {"query": "SOTA robot learning 2026"}}',
+        planned(("web_search", {"query": "SOTA robot learning 2026"})),
         "The library has one 2006 paper. Web sources survey recent methods [1].",
     )
     agent = text_protocol_agent(client, web_search=_ReadyWeb())
     events = [event async for event in agent.run(library.session, ask(SOTA_QUESTION))]
 
-    system = client.chat.completions.create.call_args_list[0].kwargs["messages"][0][
+    system = client.chat.completions.create.call_args_list[1].kwargs["messages"][0][
         "content"
     ]
     assert "field-wide" in system.lower() or "SOTA" in system
@@ -340,9 +497,11 @@ async def test_field_wide_question_uses_web_search(library: Library):
 async def test_iteration_cap_forces_a_final_answer(library: Library):
     calls = {"count": 0}
 
-    def create(**_):
+    def create(**kwargs):
         calls["count"] += 1
-        if calls["count"] > MAX_ITERATIONS:
+        if "response_format" in kwargs:
+            return reply(planned("list_papers"))
+        if calls["count"] > MAX_ITERATIONS + 1:
             return reply("Answering with what I already have.")
         return reply('{"tool": "list_papers", "input": {}}')
 
@@ -352,15 +511,15 @@ async def test_iteration_cap_forces_a_final_answer(library: Library):
 
     events = [event async for event in agent.run(library.session, ask("Keep going"))]
 
-    assert calls["count"] == MAX_ITERATIONS + 1
-    assert len(events_of(events, ChatEventType.tool_call)) == MAX_ITERATIONS
+    assert calls["count"] == MAX_ITERATIONS + 2
+    assert len(events_of(events, ChatEventType.tool_call)) == MAX_ITERATIONS + 1
     assert events_of(events, ChatEventType.token)[0]["text"] == (
         "Answering with what I already have."
     )
 
 
 async def test_empty_answer_becomes_an_error_event(library: Library):
-    agent = text_protocol_agent(scripted_llm(""))
+    agent = text_protocol_agent(scripted_llm(planned(), ""))
 
     events = [event async for event in agent.run(library.session, ask("Anything?"))]
 
@@ -370,8 +529,8 @@ async def test_empty_answer_becomes_an_error_event(library: Library):
 
 
 async def test_conversation_history_is_replayed_to_the_model(library: Library):
-    # Two replies because answering without a tool call sends it back once.
-    client = scripted_llm("Still one paper.", "Still one paper.")
+    # Planner first, then one answer (zero tools is no longer a gate retry).
+    client = scripted_llm(planned(), "Still one paper.")
     agent = text_protocol_agent(client)
     payload = ChatRequest(
         messages=[
@@ -383,7 +542,7 @@ async def test_conversation_history_is_replayed_to_the_model(library: Library):
 
     [event async for event in agent.run(library.session, payload)]
 
-    messages = client.chat.completions.create.call_args_list[0].kwargs["messages"]
+    messages = client.chat.completions.create.call_args_list[1].kwargs["messages"]
     assert messages[0]["role"] == "system"
     assert [message["content"] for message in messages[1:]] == [
         "What do I have?",
@@ -394,8 +553,7 @@ async def test_conversation_history_is_replayed_to_the_model(library: Library):
 
 async def test_a_refused_tool_is_reported_and_never_runs(library: Library):
     client = scripted_llm(
-        '{"tool": "search_library", "input": {"query": "transfer"}}',
-        "I could not search your library.",
+        planned(("search_library", {"query": "transfer"})),
         "I could not search your library.",
     )
     agent = text_protocol_agent(client, policy=PermissionPolicy([]))
@@ -414,8 +572,7 @@ async def test_a_refused_tool_does_not_count_as_gathering_evidence(library: Libr
         [PermissionRule(tool="list_papers", decision=Decision.ask)]
     )
     client = scripted_llm(
-        '{"tool": "list_papers", "input": {}}',
-        "Your library is empty.",
+        planned("list_papers"),
         "I could not check your library.",
     )
     agent = text_protocol_agent(client, policy=policy)
@@ -424,19 +581,20 @@ async def test_a_refused_tool_does_not_count_as_gathering_evidence(library: Libr
 
     refused = events_of(events, ChatEventType.tool_result)[0]
     assert refused["permission"]["decision"] == "ask"
-    retrying = events_of(events, ChatEventType.verdict)[0]
-    assert retrying["status"] == GateStatus.retrying.value
-    assert retrying["problems"][0]["kind"] == GateProblemKind.no_evidence_gathered.value
+    assert events_of(events, ChatEventType.verdict)[0]["status"] == (
+        GateStatus.supported.value
+    )
 
 
 async def test_a_fabricated_citation_is_sent_back_exactly_once(library: Library):
-    """The smoke-test failure: an answer citing [1] when nothing was registered.
+    """The smoke-test failure: an answer citing [99] when nothing was registered.
 
-    `list_papers` returns titles, not evidence, so the model has no [1] to give.
+    `list_papers` now registers inventory as [1], [2], … so a fake index must
+    be a number the list tool did not hand out.
     """
     client = scripted_llm(
-        '{"tool": "list_papers", "input": {}}',
-        "ELLA is the 2026 SOTA robot learning algorithm [1].",
+        planned("list_papers"),
+        "ELLA is the 2026 SOTA robot learning algorithm [99].",
         '{"tool": "search_library", "input": {"query": "ELLA"}}',
         "ELLA transfers knowledge across tasks [1].",
     )
@@ -459,8 +617,8 @@ async def test_a_fabricated_citation_is_sent_back_exactly_once(library: Library)
 
 async def test_the_retry_carries_the_specific_complaint(library: Library):
     client = scripted_llm(
-        '{"tool": "list_papers", "input": {}}',
-        "ELLA is the 2026 SOTA robot learning algorithm [1].",
+        planned("list_papers"),
+        "ELLA is the 2026 SOTA robot learning algorithm [99].",
         '{"tool": "search_library", "input": {"query": "ELLA"}}',
         "ELLA transfers knowledge across tasks [1].",
     )
@@ -469,18 +627,20 @@ async def test_the_retry_carries_the_specific_complaint(library: Library):
     [event async for event in agent.run(library.session, ask(SOTA_QUESTION))]
 
     complaint = client.chat.completions.create.call_args_list[2].kwargs["messages"][-1]
-    assert complaint["role"] == "user"
-    assert "[1]" in complaint["content"]
-    assert "none yet" in complaint["content"]
+    assert complaint["role"] == "system"
+    assert "[99]" in complaint["content"]
+    assert "none yet" not in complaint["content"]
+    assert "not the researcher" in complaint["content"]
+    assert "Do not thank the user" in complaint["content"]
 
 
 async def test_an_answer_that_stays_unsupported_still_ships_with_the_reason(
     library: Library,
 ):
     client = scripted_llm(
-        '{"tool": "list_papers", "input": {}}',
-        "ELLA is the 2026 SOTA [1].",
-        "ELLA is still the 2026 SOTA [1].",
+        planned("list_papers"),
+        "ELLA is the 2026 SOTA [99].",
+        "ELLA is still the 2026 SOTA [99].",
     )
     agent = text_protocol_agent(client)
 
@@ -491,15 +651,15 @@ async def test_an_answer_that_stays_unsupported_still_ships_with_the_reason(
         GateStatus.retrying.value,
         GateStatus.unsupported.value,
     ]
-    assert "[1]" in verdicts[1]["reason"]
+    assert "[99]" in verdicts[1]["reason"]
     assert events_of(events, ChatEventType.token)[0]["text"] == (
-        "ELLA is still the 2026 SOTA [1]."
+        "ELLA is still the 2026 SOTA [99]."
     )
 
 
 async def test_a_well_cited_answer_needs_no_retry(library: Library):
     client = scripted_llm(
-        '{"tool": "search_library", "input": {"query": "transfer"}}',
+        planned(("search_library", {"query": "transfer"})),
         "ELLA transfers knowledge across tasks [1].",
     )
     agent = text_protocol_agent(client)
@@ -509,6 +669,28 @@ async def test_a_well_cited_answer_needs_no_retry(library: Library):
     verdicts = events_of(events, ChatEventType.verdict)
     assert [verdict["status"] for verdict in verdicts] == [GateStatus.supported.value]
     assert client.chat.completions.create.call_count == 2
+
+
+async def test_library_overview_from_list_tools_needs_no_retry(library: Library):
+    client = scripted_llm(
+        planned("list_papers", "list_notes", "list_documents"),
+        "The library holds 1 paper from 2006 (ELLA). The document library is empty.",
+    )
+    agent = text_protocol_agent(client)
+
+    events = [
+        event
+        async for event in agent.run(
+            library.session, ask("give me an overview on my Library")
+        )
+    ]
+
+    verdicts = events_of(events, ChatEventType.verdict)
+    assert [verdict["status"] for verdict in verdicts] == [GateStatus.supported.value]
+    assert client.chat.completions.create.call_count == 2
+    assert events_of(events, ChatEventType.token)[0]["text"].startswith(
+        "The library holds 1 paper"
+    )
 
 
 async def test_a_comparison_reaches_the_ui_as_an_artifact(library: Library):
@@ -556,11 +738,12 @@ async def test_a_comparison_reaches_the_ui_as_an_artifact(library: Library):
     compare.compare = AsyncMock(return_value=response)
 
     client = scripted_llm(
-        '{"tool": "compare_papers", "input": {"paper_ids": ["'
-        + str(library.paper.id)
-        + '", "'
-        + str(other_id)
-        + '"]}}',
+        planned(
+            (
+                "compare_papers",
+                {"paper_ids": [str(library.paper.id), str(other_id)]},
+            )
+        ),
         "Both reuse past tasks, but differ on how [1].",
     )
     agent = text_protocol_agent(client, compare=compare)
@@ -624,3 +807,48 @@ async def test_unexpected_arguments_come_back_as_a_result():
     result = await run_tool(ctx, call)
 
     assert "unexpected arguments" in result.content
+
+
+async def test_empty_plan_answers_without_tools(library: Library):
+    client = scripted_llm(
+        planned(),
+        "Hello — what would you like to look up in your library?",
+    )
+    agent = text_protocol_agent(client)
+
+    events = [event async for event in agent.run(library.session, ask("Hello"))]
+
+    assert events_of(events, ChatEventType.tool_call) == []
+    text = events_of(events, ChatEventType.token)[0]["text"]
+    assert text.startswith("Hello")
+    assert "ELLA" not in text
+    assert events_of(events, ChatEventType.verdict)[0]["status"] == (
+        GateStatus.supported.value
+    )
+    answer_system = client.chat.completions.create.call_args_list[1].kwargs["messages"][
+        0
+    ]["content"]
+    assert "No tools were selected" in answer_system
+    assert "How to call a tool" not in answer_system
+
+
+async def test_empty_plan_retry_enables_tools(library: Library):
+    client = scripted_llm(
+        planned(),
+        "ELLA transfers across tasks [1].",
+        '{"tool": "search_library", "input": {"query": "ELLA"}}',
+        "ELLA transfers knowledge across tasks [1].",
+    )
+    agent = text_protocol_agent(client)
+
+    events = [event async for event in agent.run(library.session, ask("Hello"))]
+
+    verdicts = events_of(events, ChatEventType.verdict)
+    assert verdicts[0]["status"] == GateStatus.retrying.value
+    retry_system = client.chat.completions.create.call_args_list[2].kwargs["messages"][
+        0
+    ]["content"]
+    assert "search_library" in retry_system
+    assert [data["name"] for data in events_of(events, ChatEventType.tool_call)] == [
+        "search_library"
+    ]

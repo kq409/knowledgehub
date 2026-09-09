@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Paper, PaperChunk, PaperStatus
+from models import DigestStatus, Paper, PaperChunk, PaperStatus
 from services.embeddings import EmbeddingService
 from services.paper_parser import PaperParser, ParsedPaper
 
@@ -54,6 +54,9 @@ async def apply_parse_result(
     paper.page_count = parsed.page_count
     paper.processing_status = PaperStatus.ready.value
     paper.processing_error = None
+    paper.summary = None
+    paper.digest = {}
+    paper.digest_status = DigestStatus.pending.value
     paper.updated_at = datetime.now(UTC)
 
     for index, (chunk, embedding) in enumerate(

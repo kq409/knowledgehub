@@ -236,6 +236,11 @@
   color: var(--color-accent-green-fg);
 }
 
+.source.document {
+  background: var(--color-accent-amber-bg);
+  color: var(--color-accent-amber-fg);
+}
+
 .deleteButton {
   display: flex;
   align-items: center;
@@ -275,6 +280,38 @@
   color: var(--color-accent-red-fg);
   font-size: var(--font-size-sm);
   white-space: pre-wrap;
+}
+
+.digestBlock {
+  margin: 0 0 var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.digestSummary {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.digestList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.digestKey {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin-right: var(--space-2);
 }
 
 .fieldLabel {

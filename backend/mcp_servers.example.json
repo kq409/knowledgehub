@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "docs": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "some_docs_server"],
+      "allow": ["search", "get_version"],
+      "enabled": false
+    }
+  }
+}

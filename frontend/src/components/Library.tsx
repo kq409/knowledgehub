@@ -1,24 +1,18 @@
-import { BookOpen, Trash2, Upload, FileText } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, FileText, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import styles from './Library.module.css';
 import type {
+  LibraryDocument,
   LibraryNote,
   Paper,
   ProcessingStatus,
 } from '../types';
 import { Box } from './Box';
 import { TextBox } from './TextBox';
-import { Spinner } from './Spinner';
 import { RelatedPapersPanel } from './RelatedPapers';
 
-type LibraryFilter = 'all' | 'papers' | 'notes';
-type LibraryKind = 'paper' | 'note';
-
-interface LibraryUploadResponse {
-  kind: LibraryKind;
-  paper: Paper | null;
-  note: LibraryNote | null;
-}
+type LibraryFilter = 'all' | 'papers' | 'notes' | 'documents';
+type LibraryKind = 'paper' | 'note' | 'document';
 
 interface SelectedRef {
   kind: LibraryKind;
@@ -34,6 +28,7 @@ interface LibraryItem {
   chunkCount: number;
   paper?: Paper;
   note?: LibraryNote;
+  document?: LibraryDocument;
 }
 
 function formatDate(value: string): string {
@@ -55,6 +50,21 @@ function linesToList(value: string): string[] {
     .filter(Boolean);
 }
 
+function digestLines(paper: Paper): { label: string; value: string }[] {
+  const digest = paper.digest ?? {
+    problem: '',
+    method: '',
+    key_results: '',
+    limitations: '',
+  };
+  return [
+    { label: 'Problem', value: digest.problem },
+    { label: 'Method', value: digest.method },
+    { label: 'Results', value: digest.key_results },
+    { label: 'Limitations', value: digest.limitations },
+  ].filter((item) => item.value.trim());
+}
+
 function statusClass(status: ProcessingStatus): string {
   return `${styles.status} ${styles[status]}`;
 }
@@ -63,12 +73,18 @@ function kindLabel(item: LibraryItem): string {
   if (item.kind === 'paper') {
     return 'Paper';
   }
+  if (item.kind === 'document') {
+    return 'Document';
+  }
   return item.note?.source_type === 'handwritten' ? 'Handwritten' : 'Voice';
 }
 
 function kindClass(item: LibraryItem): string {
   if (item.kind === 'paper') {
     return `${styles.source} ${styles.paper}`;
+  }
+  if (item.kind === 'document') {
+    return `${styles.source} ${styles.document}`;
   }
   return `${styles.source} ${styles[item.note?.source_type ?? 'handwritten']}`;
 }
@@ -78,7 +94,9 @@ function linkedPaperLabel(note: LibraryNote, papers: Paper[]): string {
     return '';
   }
   const titles = new Map(papers.map((paper) => [paper.id, paper.title]));
-  return note.paper_ids.map((id) => titles.get(id) ?? 'Unknown paper').join(', ');
+  return note.paper_ids
+    .map((id) => titles.get(id) ?? 'Unknown paper')
+    .join(', ');
 }
 
 function networkErrorMessage(err: unknown): string {
@@ -104,7 +122,11 @@ async function readErrorDetail(response: Response): Promise<string> {
   return text || `Request failed (${response.status})`;
 }
 
-function toItems(papers: Paper[], notes: LibraryNote[]): LibraryItem[] {
+function toItems(
+  papers: Paper[],
+  notes: LibraryNote[],
+  documents: LibraryDocument[]
+): LibraryItem[] {
   const items: LibraryItem[] = [
     ...papers.map((paper) => ({
       kind: 'paper' as const,
@@ -124,23 +146,28 @@ function toItems(papers: Paper[], notes: LibraryNote[]): LibraryItem[] {
       chunkCount: note.chunk_count,
       note,
     })),
+    ...documents.map((document) => ({
+      kind: 'document' as const,
+      id: document.id,
+      title: document.title,
+      updatedAt: document.updated_at,
+      status: document.processing_status,
+      chunkCount: document.chunk_count,
+      document,
+    })),
   ];
-  items.sort(
-    (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
-  );
+  items.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   return items;
 }
 
 export function Library() {
   const [papers, setPapers] = useState<Paper[]>([]);
   const [notes, setNotes] = useState<LibraryNote[]>([]);
+  const [documents, setDocuments] = useState<LibraryDocument[]>([]);
   const [selected, setSelected] = useState<SelectedRef | null>(null);
   const [filter, setFilter] = useState<LibraryFilter>('all');
-  const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [queuedHint, setQueuedHint] = useState<string | null>(null);
   const [linkedNotes, setLinkedNotes] = useState<LibraryNote[]>([]);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftAuthors, setDraftAuthors] = useState('');
@@ -154,9 +181,11 @@ export function Library() {
   const [draftNextSteps, setDraftNextSteps] = useState('');
   const [draftExtractedText, setDraftExtractedText] = useState('');
   const [draftPaperIds, setDraftPaperIds] = useState<string[]>([]);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const items = useMemo(() => toItems(papers, notes), [papers, notes]);
+  const items = useMemo(
+    () => toItems(papers, notes, documents),
+    [papers, notes, documents]
+  );
   const visibleItems = useMemo(() => {
     if (filter === 'papers') {
       return items.filter((item) => item.kind === 'paper');
@@ -164,18 +193,28 @@ export function Library() {
     if (filter === 'notes') {
       return items.filter((item) => item.kind === 'note');
     }
+    if (filter === 'documents') {
+      return items.filter((item) => item.kind === 'document');
+    }
     return items;
   }, [items, filter]);
 
   const selectedItem =
     items.find(
-      (item) => selected != null && item.kind === selected.kind && item.id === selected.id
+      (item) =>
+        selected != null &&
+        item.kind === selected.kind &&
+        item.id === selected.id
     ) ?? null;
   const selectedPaper = selectedItem?.paper ?? null;
   const selectedNote = selectedItem?.note ?? null;
+  const selectedDocument = selectedItem?.document ?? null;
 
   const hasPending = items.some(
-    (item) => item.status === 'pending' || item.status === 'processing'
+    (item) =>
+      item.status === 'pending' ||
+      item.status === 'processing' ||
+      item.paper?.digest_status === 'pending'
   );
   const waitingForRelated = notes.some(
     (note) =>
@@ -210,9 +249,22 @@ export function Library() {
     }
   }, []);
 
+  const loadDocuments = useCallback(async () => {
+    try {
+      const response = await fetch('/api/documents');
+      if (!response.ok) {
+        throw new Error(await readErrorDetail(response));
+      }
+      setDocuments((await response.json()) as LibraryDocument[]);
+    } catch (err) {
+      console.error('Failed to load documents:', err);
+      setError('Could not load documents: ' + networkErrorMessage(err));
+    }
+  }, []);
+
   const loadLibrary = useCallback(async () => {
-    await Promise.all([loadPapers(), loadNotes()]);
-  }, [loadPapers, loadNotes]);
+    await Promise.all([loadPapers(), loadNotes(), loadDocuments()]);
+  }, [loadPapers, loadNotes, loadDocuments]);
 
   useEffect(() => {
     void loadLibrary();
@@ -232,7 +284,9 @@ export function Library() {
     if (selectedPaper) {
       setDraftTitle(selectedPaper.title);
       setDraftAuthors(listToLines(selectedPaper.authors));
-      setDraftYear(selectedPaper.year != null ? String(selectedPaper.year) : '');
+      setDraftYear(
+        selectedPaper.year != null ? String(selectedPaper.year) : ''
+      );
       setDraftAbstract(selectedPaper.abstract ?? '');
       setDraftTags(listToLines(selectedPaper.tags));
       const loadLinked = async () => {
@@ -251,6 +305,10 @@ export function Library() {
       return;
     }
     setLinkedNotes([]);
+    if (selectedDocument) {
+      setDraftTitle(selectedDocument.title);
+      return;
+    }
     if (!selectedNote) {
       return;
     }
@@ -263,49 +321,7 @@ export function Library() {
     setDraftTags(listToLines(selectedNote.tags));
     setDraftExtractedText(selectedNote.extracted_text ?? '');
     setDraftPaperIds(selectedNote.paper_ids ?? []);
-  }, [selectedPaper, selectedNote]);
-
-  const uploadPdf = useCallback(
-    async (file: File) => {
-      if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
-        setError('Please upload a PDF file');
-        return;
-      }
-
-      setIsUploading(true);
-      setError(null);
-      setQueuedHint(null);
-      try {
-        const formData = new FormData();
-        formData.append('file', file, file.name);
-        const response = await fetch('/api/library/upload', {
-          method: 'POST',
-          body: formData,
-        });
-        if (!response.ok) {
-          throw new Error(await readErrorDetail(response));
-        }
-        const data = (await response.json()) as LibraryUploadResponse;
-        setFilter('all');
-        if (data.kind === 'paper' && data.paper) {
-          setSelected({ kind: 'paper', id: data.paper.id });
-          setQueuedHint('Queued as paper from document content');
-        } else if (data.kind === 'note' && data.note) {
-          setSelected({ kind: 'note', id: data.note.id });
-          setQueuedHint('Queued as note from document content');
-        }
-        await loadLibrary();
-      } catch (err) {
-        setError('Upload failed: ' + networkErrorMessage(err));
-      } finally {
-        setIsUploading(false);
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-        }
-      }
-    },
-    [loadLibrary]
-  );
+  }, [selectedPaper, selectedNote, selectedDocument]);
 
   const savePaper = useCallback(async () => {
     if (!selectedPaper) {
@@ -402,13 +418,40 @@ export function Library() {
     loadNotes,
   ]);
 
+  const saveDocument = useCallback(async () => {
+    if (!selectedDocument) {
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/documents/${selectedDocument.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: draftTitle.trim() || selectedDocument.title,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorDetail(response));
+      }
+      await loadDocuments();
+    } catch (err) {
+      setError('Save failed: ' + networkErrorMessage(err));
+    } finally {
+      setIsSaving(false);
+    }
+  }, [selectedDocument, draftTitle, loadDocuments]);
+
   const deleteItem = useCallback(
     async (item: LibraryItem) => {
       try {
         const path =
           item.kind === 'paper'
             ? `/api/papers/${item.id}`
-            : `/api/notes/${item.id}`;
+            : item.kind === 'document'
+              ? `/api/documents/${item.id}`
+              : `/api/notes/${item.id}`;
         const response = await fetch(path, { method: 'DELETE' });
         if (!response.ok) {
           throw new Error(await readErrorDetail(response));
@@ -434,78 +477,6 @@ export function Library() {
 
   return (
     <div className={`${styles.library} ${styles.compact}`}>
-      <Box header="Upload PDF" icon={Upload} compact>
-        <div
-          className={`${styles.dropzone} ${isDragging ? styles.dragging : ''} ${
-            isUploading ? styles.uploading : ''
-          }`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setIsDragging(true);
-          }}
-          onDragLeave={(e) => {
-            e.preventDefault();
-            setIsDragging(false);
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            setIsDragging(false);
-            const file = e.dataTransfer.files?.[0];
-            if (file) {
-              void uploadPdf(file);
-            }
-          }}
-          onClick={() => fileInputRef.current?.click()}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              fileInputRef.current?.click();
-            }
-          }}
-          aria-label="Upload PDF"
-        >
-          {isUploading ? (
-            <>
-              <Spinner />
-              <p>Uploading — classifying from document content…</p>
-            </>
-          ) : (
-            <>
-              <Upload className={styles.uploadIcon} />
-              <p className={styles.dropTitle}>
-                {isDragging ? 'Drop PDF here' : 'Upload PDF'}
-              </p>
-              <p className={styles.dropSubtitle}>
-                Drag and drop or click to browse. The file is read after upload
-                and filed as a paper or a note automatically.
-              </p>
-            </>
-          )}
-        </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="application/pdf,.pdf"
-          className={styles.hiddenInput}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) {
-              void uploadPdf(file);
-            }
-          }}
-        />
-      </Box>
-
-      {queuedHint && (
-        <div className={styles.notice} role="status">
-          <span>{queuedHint}</span>
-          <button type="button" onClick={() => setQueuedHint(null)}>
-            Dismiss
-          </button>
-        </div>
-      )}
-
       {error && (
         <div className={styles.error} role="alert">
           <span>{error}</span>
@@ -516,12 +487,17 @@ export function Library() {
       )}
 
       <Box header="Library" icon={BookOpen} compact>
-        <div className={styles.filters} role="tablist" aria-label="Library filter">
+        <div
+          className={styles.filters}
+          role="tablist"
+          aria-label="Library filter"
+        >
           {(
             [
               ['all', 'All'],
               ['papers', 'Papers'],
               ['notes', 'Notes'],
+              ['documents', 'Documents'],
             ] as const
           ).map(([value, label]) => (
             <button
@@ -540,7 +516,7 @@ export function Library() {
         </div>
         {visibleItems.length === 0 ? (
           <p className={styles.empty}>
-            Nothing here yet. Upload a PDF to start — or save a voice note.
+            Nothing here yet. Attach a file in Chat — or save a voice note.
           </p>
         ) : (
           <ul className={styles.list}>
@@ -556,15 +532,21 @@ export function Library() {
                   <button
                     type="button"
                     className={styles.selectButton}
-                    onClick={() => setSelected({ kind: item.kind, id: item.id })}
+                    onClick={() =>
+                      setSelected({ kind: item.kind, id: item.id })
+                    }
                   >
                     <span className={styles.itemTitle}>{item.title}</span>
                     <span className={styles.itemMeta}>
                       <span className={kindClass(item)}>{kindLabel(item)}</span>
-                      <span className={statusClass(item.status)}>{item.status}</span>
+                      <span className={statusClass(item.status)}>
+                        {item.status}
+                      </span>
                       <span>{item.chunkCount} chunks</span>
                       {item.note && linkedPaperLabel(item.note, papers) ? (
-                        <span>Linked: {linkedPaperLabel(item.note, papers)}</span>
+                        <span>
+                          Linked: {linkedPaperLabel(item.note, papers)}
+                        </span>
                       ) : null}
                       <span>{formatDate(item.updatedAt)}</span>
                     </span>
@@ -606,6 +588,30 @@ export function Library() {
             <p className={styles.processingError}>
               {selectedPaper.processing_error}
             </p>
+          )}
+
+          <p className={styles.fieldLabel}>Understanding</p>
+          {selectedPaper.digest_status === 'pending' ? (
+            <p className={styles.empty}>Summarizing this paper…</p>
+          ) : selectedPaper.digest_status === 'failed' &&
+            !selectedPaper.summary ? (
+            <p className={styles.empty}>Summary unavailable.</p>
+          ) : selectedPaper.summary || digestLines(selectedPaper).length > 0 ? (
+            <div className={styles.digestBlock}>
+              {selectedPaper.summary ? (
+                <p className={styles.digestSummary}>{selectedPaper.summary}</p>
+              ) : null}
+              <ul className={styles.digestList}>
+                {digestLines(selectedPaper).map((item) => (
+                  <li key={item.label}>
+                    <span className={styles.digestKey}>{item.label}</span>
+                    {item.value}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className={styles.empty}>No stored summary yet.</p>
           )}
 
           <label className={styles.fieldLabel} htmlFor="library-paper-title">
@@ -704,6 +710,58 @@ export function Library() {
         </Box>
       )}
 
+      {selectedDocument && (
+        <Box header="Document Details" icon={FileText} compact>
+          <div className={styles.metaRow}>
+            <span className={`${styles.source} ${styles.document}`}>
+              Document
+            </span>
+            <span className={statusClass(selectedDocument.processing_status)}>
+              {selectedDocument.processing_status}
+            </span>
+            <span className={styles.metaText}>
+              {selectedDocument.chunk_count} chunks
+              {' · '}
+              {selectedDocument.original_filename}
+            </span>
+          </div>
+          {selectedDocument.processing_error && (
+            <p className={styles.processingError}>
+              {selectedDocument.processing_error}
+            </p>
+          )}
+          <label className={styles.fieldLabel} htmlFor="library-document-title">
+            Title
+          </label>
+          <TextBox
+            id="library-document-title"
+            mode="input"
+            value={draftTitle}
+            onChange={setDraftTitle}
+            rows={2}
+            ariaLabel="Document title"
+          />
+          <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              onClick={() => void saveDocument()}
+              disabled={isSaving || !draftTitle.trim()}
+            >
+              {isSaving ? 'Saving…' : 'Save'}
+            </button>
+            <a
+              className={styles.secondaryButton}
+              href={`/api/documents/${selectedDocument.id}/file`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open file
+            </a>
+          </div>
+        </Box>
+      )}
+
       {selectedNote && (
         <Box header="Note Details" icon={FileText} compact>
           <div className={styles.metaRow}>
@@ -751,7 +809,10 @@ export function Library() {
 
           {selectedNote.source_type === 'voice' && (
             <>
-              <label className={styles.fieldLabel} htmlFor="library-note-summary">
+              <label
+                className={styles.fieldLabel}
+                htmlFor="library-note-summary"
+              >
                 Summary
               </label>
               <TextBox
@@ -848,7 +909,9 @@ export function Library() {
 
           <label className={styles.fieldLabel} id="library-note-papers-label">
             Linked papers
-            <span className={styles.hint}>used when comparing those papers</span>
+            <span className={styles.hint}>
+              used when comparing those papers
+            </span>
           </label>
           {papers.length === 0 ? (
             <p className={styles.empty}>No papers in the library yet.</p>

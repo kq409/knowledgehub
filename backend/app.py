@@ -15,17 +15,29 @@ from db import close_db, init_db, run_migrations
 from routers.ask import router as ask_router
 from routers.chat import router as chat_router
 from routers.compare import router as compare_router
+from routers.conversations import router as conversations_router
+from routers.documents import resume_pending_documents
+from routers.documents import router as documents_router
 from routers.eval import router as eval_router
 from routers.library import router as library_router
 from routers.memories import router as memories_router
 from routers.notes import resume_pending_notes
 from routers.notes import router as notes_router
 from routers.notes import schedule_pipeline_warmup as schedule_note_pipeline_warmup
-from routers.papers import resume_pending_papers, schedule_pipeline_warmup
+from routers.papers import (
+    resume_missing_digests,
+    resume_pending_papers,
+    schedule_pipeline_warmup,
+)
 from routers.papers import router as papers_router
 from routers.voice_notes import router as voice_notes_router
+from services.agent.approvals import ApprovalBroker
 from services.agent.gate import EvidenceGate
 from services.agent.loop import ResearchAgent
+from services.agent.mcp_client import McpConfigError, McpRegistry, load_server_configs
+from services.agent.permissions import approval_enabled
+from services.agent.skills import reload_skills
+from services.agent.telemetry import configure_agent_logging
 from services.ask import AskService
 from services.compare import COMPARE_MAX_TOKENS, CompareService, max_tokens_from_env
 from services.connect import (
@@ -33,6 +45,7 @@ from services.connect import (
     ConnectService,
     connect_min_similarity_from_env,
 )
+from services.document_pipeline import DocumentPipeline
 from services.embeddings import EmbeddingService
 from services.extraction import ExtractionService
 from services.retrieval import min_similarity_from_env
@@ -54,6 +67,7 @@ async def lifespan(app: FastAPI):
     """Uses OpenAI-compatible API (Ollama, OpenAI, LM Studio, etc.). Configure via .env file."""
     global service
     print("🚀 Starting KnowledgeHub...")
+    configure_agent_logging()
 
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -128,6 +142,10 @@ async def lifespan(app: FastAPI):
             "AGENT_COMPARE_MAX_TOKENS", fallback=compare_max_tokens
         ),
     )
+    # Scanned once here so the catalog is warm and its cost is paid at startup
+    # rather than inside the first chat request.
+    installed_skills = reload_skills()
+    print(f"📚 Skills: {len(installed_skills)} installed")
     evidence_gate = EvidenceGate(
         llm_client=llm_client,
         llm_model=llm_model,
@@ -137,6 +155,21 @@ async def lifespan(app: FastAPI):
         "🔍 Evidence gate: deterministic checks"
         + (" + LLM reviewer" if evidence_gate.uses_judge() else " only")
     )
+    mcp_registry = None
+    try:
+        mcp_configs = [item for item in load_server_configs() if item.enabled]
+    except McpConfigError as exc:
+        print(f"⚠️  MCP config skipped: {exc}")
+        mcp_configs = []
+    if mcp_configs:
+        mcp_registry = McpRegistry(mcp_configs)
+        await mcp_registry.connect()
+        print(f"🔌 MCP: {len(mcp_registry.tools())} external tool(s)")
+    approver = ApprovalBroker() if approval_enabled() else None
+    if approver is not None:
+        print("✍️  Write tools wait for approval")
+    app.state.approvals = approver
+    app.state.mcp = mcp_registry
     app.state.agent = ResearchAgent(
         llm_client=llm_client,
         llm_model=llm_model,
@@ -145,11 +178,14 @@ async def lifespan(app: FastAPI):
         compare=agent_compare,
         extraction=app.state.extraction,
         connect=app.state.connect,
+        approver=approver,
+        mcp=mcp_registry,
     )
     app.state.paper_pipeline = None
     app.state.paper_pipeline_lock = asyncio.Lock()
     app.state.note_pipeline = None
     app.state.note_pipeline_lock = asyncio.Lock()
+    app.state.document_pipeline = DocumentPipeline(app.state.embeddings)
     schedule_pipeline_warmup(app)
     schedule_note_pipeline_warmup(app)
 
@@ -172,11 +208,23 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             print(f"⚠️  Failed to resume queued papers: {exc}", flush=True)
         try:
+            await resume_missing_digests(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"⚠️  Failed to resume paper digests: {exc}", flush=True)
+        try:
             await resume_pending_notes(app)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             print(f"⚠️  Failed to resume queued notes: {exc}", flush=True)
+        try:
+            await resume_pending_documents(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"⚠️  Failed to resume queued documents: {exc}", flush=True)
 
     resume_task = asyncio.create_task(resume_queued())
     yield
@@ -184,6 +232,9 @@ async def lifespan(app: FastAPI):
     warmup = getattr(app.state, "paper_pipeline_warmup", None)
     if warmup is not None:
         warmup.cancel()
+    mcp = getattr(app.state, "mcp", None)
+    if mcp is not None:
+        await mcp.close()
     await close_db()
 
 
@@ -213,9 +264,11 @@ app.add_middleware(
 app.include_router(voice_notes_router)
 app.include_router(notes_router)
 app.include_router(papers_router)
+app.include_router(documents_router)
 app.include_router(library_router)
 app.include_router(ask_router)
 app.include_router(chat_router)
+app.include_router(conversations_router)
 app.include_router(compare_router)
 app.include_router(memories_router)
 app.include_router(eval_router)

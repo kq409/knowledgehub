@@ -21,6 +21,7 @@ from schemas import (
     normalize_dimensions,
     normalize_paper_ids,
 )
+from services.agent.telemetry import log_warning
 from services.embeddings import EmbeddingService
 from services.llm_chat import max_tokens_from_env as max_tokens_from_env
 from services.retrieval import (
@@ -29,6 +30,14 @@ from services.retrieval import (
     list_linked_notes,
     search_for_paper,
     snippet_from,
+)
+from services.workflow import (
+    ProgressSink,
+    Step,
+    WorkflowJournal,
+    WorkflowRun,
+    fingerprint,
+    require_keys,
 )
 
 MAP_PROMPT_FILE = Path(__file__).resolve().parent.parent / "compare_map_prompt.txt"
@@ -199,7 +208,12 @@ class CompareService:
                         ),
                     }
                 )
-                print(f"⚠️  Compare {what} attempt {attempt + 1} failed: {exc}")
+                log_warning(
+                    "compare_json_invalid",
+                    stage=what,
+                    attempt=attempt + 1,
+                    error=str(exc),
+                )
         raise CompareError(f"Could not parse {what} JSON: {last_error}") from last_error
 
     def _map_paper(
@@ -257,6 +271,55 @@ class CompareService:
         except ValidationError as exc:
             raise CompareError(f"Invalid synthesis payload: {exc}") from exc
 
+    def _default_run_id(self, paper_ids: list[uuid.UUID], dimensions: list[str]) -> str:
+        """Same papers and dimensions means the same run, so a repeat resumes.
+
+        Derived rather than random on purpose: a researcher who retries a
+        failed comparison from the UI sends the same request, and that should
+        reuse the calls the first attempt already paid for.
+        """
+        digest = fingerprint(
+            "compare",
+            sorted(str(paper_id) for paper_id in paper_ids),
+            dimensions,
+            self.prompt_version,
+            self.llm_model,
+        )
+        return f"compare:{digest[:32]}"
+
+    async def _reduce_step(
+        self,
+        workflow: WorkflowRun,
+        papers: list[Paper],
+        dimensions: list[str],
+        cells: dict[uuid.UUID, dict[str, str]],
+    ) -> CompareSynthesis:
+        async def run() -> dict:
+            synthesis = await asyncio.to_thread(self._reduce, papers, dimensions, cells)
+            return synthesis.model_dump()
+
+        step = Step(
+            kind="compare_reduce",
+            label="synthesis",
+            run=run,
+            # The synthesis depends on every cell, so a changed cell has to
+            # invalidate it -- otherwise a resumed run would pair fresh cells
+            # with a stale conclusion.
+            inputs=(
+                dimensions,
+                {str(key): value for key, value in sorted(cells.items())},
+                self.prompt_version,
+            ),
+            validate=require_keys("agreements", "disagreements", "research_gap"),
+        )
+        outcome = await workflow.step(step)
+        if not outcome.ok or outcome.result is None:
+            raise CompareError(f"Could not synthesise the comparison: {outcome.error}")
+        try:
+            return CompareSynthesis.model_validate(outcome.result)
+        except ValidationError as exc:
+            raise CompareError(f"Invalid synthesis payload: {exc}") from exc
+
     async def _load_papers(
         self, session: AsyncSession, paper_ids: list[uuid.UUID]
     ) -> list[Paper]:
@@ -282,9 +345,46 @@ class CompareService:
             )
         return papers
 
+    def _map_step(
+        self,
+        paper: Paper,
+        dimensions: list[str],
+        hits: list[RetrievalHit],
+    ) -> Step:
+        """One paper's cells, journalled under a key that survives resume.
+
+        The key covers the paper, the dimensions, and the prompt version --
+        change any of them and this becomes a different step whose old answer
+        no longer applies.
+        """
+
+        async def run() -> dict:
+            cells = await asyncio.to_thread(self._map_paper, paper, dimensions, hits)
+            return {"cells": cells}
+
+        return Step(
+            kind="compare_map",
+            label=paper.title or str(paper.id),
+            run=run,
+            inputs=(str(paper.id), dimensions, self.prompt_version),
+            validate=require_keys("cells"),
+        )
+
     async def compare(
-        self, session: AsyncSession, payload: CompareRequest
+        self,
+        session: AsyncSession,
+        payload: CompareRequest,
+        *,
+        run_id: str | None = None,
+        on_progress: ProgressSink | None = None,
     ) -> CompareResponse:
+        """Build a comparison. Pass the same `run_id` again to resume one.
+
+        The per-paper model calls used to run one after another, so a failure
+        on the last paper discarded every call before it. They now run
+        concurrently and each result is journalled, which means a retry costs
+        only the steps that did not finish.
+        """
         try:
             paper_ids = normalize_paper_ids(payload.paper_ids)
             dimensions = normalize_dimensions(payload.dimensions)
@@ -299,16 +399,52 @@ class CompareService:
         for note in linked:
             notes_by_paper.setdefault(note.paper_id, []).append(note)
 
+        workflow = WorkflowRun(
+            journal=WorkflowJournal(
+                session, run_id or self._default_run_id(paper_ids, dimensions)
+            ),
+            on_progress=on_progress,
+        )
+        await workflow.start()
+
+        workflow.phase("evidence")
+        hits_by_paper: dict[uuid.UUID, list[RetrievalHit]] = {}
+        for position, paper in enumerate(papers, start=1):
+            hits_by_paper[paper.id] = await search_for_paper(
+                session, query_embedding, paper.id, query_text=query
+            )
+            workflow.report(paper.title, position, len(papers), cached=False)
+
+        workflow.phase("per-paper")
+        outcomes = await workflow.parallel(
+            [
+                self._map_step(paper, dimensions, hits_by_paper[paper.id])
+                for paper in papers
+            ]
+        )
+
         cells: dict[uuid.UUID, dict[str, str]] = {}
+        failures: list[str] = []
+        for paper, outcome in zip(papers, outcomes, strict=True):
+            if outcome.ok and outcome.result is not None:
+                cells[paper.id] = cells_from_payload(
+                    outcome.result.get("cells") or {}, dimensions
+                )
+            else:
+                failures.append(f"{paper.title}: {outcome.error}")
+        if failures:
+            # The finished steps stay journalled, so retrying this run_id only
+            # recomputes these.
+            raise CompareError(
+                "Could not extract cells for "
+                + "; ".join(failures)
+                + f" (retry run_id={workflow.journal.run_id} to reuse the rest)"
+            )
+
         citations: list[CompareCitation] = []
         index = 1
         for paper in papers:
-            hits = await search_for_paper(
-                session, query_embedding, paper.id, query_text=query
-            )
-            mapped = await asyncio.to_thread(self._map_paper, paper, dimensions, hits)
-            cells[paper.id] = mapped
-            for hit in hits:
+            for hit in hits_by_paper[paper.id]:
                 citations.append(
                     CompareCitation(
                         index=index,
@@ -326,7 +462,9 @@ class CompareService:
                 )
                 index += 1
 
-        synthesis = await asyncio.to_thread(self._reduce, papers, dimensions, cells)
+        workflow.phase("synthesis")
+        synthesis = await self._reduce_step(workflow, papers, dimensions, cells)
+        await workflow.finish()
 
         paper_results = [
             ComparePaperResult(

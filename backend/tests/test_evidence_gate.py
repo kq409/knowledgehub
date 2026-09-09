@@ -1,3 +1,4 @@
+import json
 import uuid
 from unittest.mock import MagicMock
 
@@ -7,6 +8,8 @@ from schemas import ChatCitation, CitationSourceType, GateProblemKind, GateStatu
 from services.agent.gate import (
     EvidenceGate,
     GateMode,
+    _problems_from_payload,
+    _short_reason,
     check_deterministic,
     extract_citation_indices,
     gate_mode_from_env,
@@ -66,12 +69,10 @@ def test_a_number_no_tool_handed_out_is_a_hard_failure():
     assert "[1]" in problems[0].detail
 
 
-def test_answering_without_opening_anything_is_a_hard_failure():
-    problems = check_deterministic("Transformers are great.", set(), tool_calls_made=0)
-
-    assert [problem.kind for problem in problems] == [
-        GateProblemKind.no_evidence_gathered
-    ]
+def test_zero_tool_answer_without_citations_is_allowed():
+    assert (
+        check_deterministic("Hello — how can I help?", set(), tool_calls_made=0) == []
+    )
 
 
 def test_evidence_gathered_but_never_cited_is_only_a_warning():
@@ -288,3 +289,181 @@ async def test_without_a_client_only_the_cheap_checks_run():
 
     assert verdict.status is GateStatus.supported
     assert verdict.checked_by == "deterministic"
+
+
+async def test_zero_tool_uncited_answer_skips_the_reviewer():
+    client = judge_llm('{"verdict": "unsupported", "reason": "should not run"}')
+    gate = cloud_gate(client)
+
+    verdict = await gate.check(
+        question="Hello",
+        answer="Hello — what would you like to explore?",
+        citations=[],
+        tool_calls_made=0,
+    )
+
+    client.chat.completions.create.assert_not_called()
+    assert verdict.status is GateStatus.supported
+    assert verdict.ok
+
+
+def test_gate_feedback_is_an_internal_check():
+    from services.agent.gate import GateProblem, GateVerdict
+
+    verdict = GateVerdict(
+        status=GateStatus.unsupported,
+        problems=[
+            GateProblem(
+                kind=GateProblemKind.fabricated_citation,
+                detail="The answer cites [99], but no tool ever returned that evidence.",
+            )
+        ],
+    )
+    text = verdict.feedback()
+    assert "not the researcher" in text
+    assert "Do not thank the user" in text
+    assert "Fix this before answering" not in text
+    assert "[99]" in text
+
+
+async def test_inventory_snippets_reach_the_reviewer():
+    client = judge_llm(
+        '{"verdict": "supported", "reason": "counts match the inventory.", '
+        '"unsupported_claims": []}'
+    )
+    gate = cloud_gate(client)
+    papers = ChatCitation(
+        index=1,
+        source_type=CitationSourceType.paper,
+        source_id=uuid.uuid4(),
+        chunk_id=uuid.uuid4(),
+        title="Paper library",
+        section="inventory",
+        snippet="Library: 1 paper(s), 1 ready to search. Publication years: 2006.",
+    )
+    empty_docs = ChatCitation(
+        index=2,
+        source_type=CitationSourceType.document,
+        source_id=uuid.uuid4(),
+        chunk_id=uuid.uuid4(),
+        title="Document library",
+        section="inventory",
+        snippet="The document library is empty.",
+    )
+
+    verdict = await gate.check(
+        question="give me an overview on my Library",
+        answer="The library holds 1 paper from 2006. The document library is empty.",
+        citations=[papers, empty_docs],
+        tool_calls_made=2,
+    )
+
+    payload = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    assert "Publication years: 2006" in payload
+    assert "The document library is empty." in payload
+    assert verdict.status is GateStatus.supported
+
+
+def test_unsupported_without_quoted_claims_is_treated_as_supported():
+    problems = _problems_from_payload(
+        {
+            "verdict": "unsupported",
+            "reason": (
+                "The answer claims ELLA is from 1998, but the snippets show "
+                "ELLA is 1998. So all claims are supported. I will return supported."
+            ),
+            "unsupported_claims": [],
+        }
+    )
+    assert problems == []
+
+
+def test_unsupported_reason_is_clipped_to_one_short_sentence():
+    ramble = (
+        "The answer claims ELLA is from 1998 and Progress & Compress is from 2016, "
+        "but the snippets show ELLA is 1998. However, everything matches. "
+        + ("x" * 400)
+    )
+    problems = _problems_from_payload(
+        {
+            "verdict": "unsupported",
+            "reason": ramble,
+            "unsupported_claims": ["All four are in continual/lifelong learning"],
+        }
+    )
+    assert len(problems) == 1
+    assert problems[0].hard
+    assert "Unsupported:" in problems[0].detail
+    assert len(problems[0].detail) < len(ramble)
+    assert "continual/lifelong learning" in problems[0].detail
+
+
+def test_short_reason_keeps_a_single_sentence():
+    assert _short_reason("Counts match. Extra recap.") == "Counts match."
+
+
+async def test_rambling_unsupported_verdict_does_not_block():
+    gate = cloud_gate(
+        judge_llm(
+            json.dumps(
+                {
+                    "verdict": "unsupported",
+                    "reason": (
+                        "The answer claims ELLA is from 1998, but the snippets "
+                        "show ELLA is 1998. I see no unsupported claims."
+                    ),
+                    "unsupported_claims": [],
+                }
+            )
+        )
+    )
+    verdict = await gate.check(
+        question="give me an overview on my Library",
+        answer="ELLA (1998). The library holds 1 paper.",
+        citations=[citation(1, snippet="ELLA | 1998")],
+        tool_calls_made=1,
+    )
+    assert verdict.status is GateStatus.supported
+    assert verdict.ok
+
+
+def test_unaddressed_parts_are_a_hard_incomplete():
+    problems = _problems_from_payload(
+        {
+            "verdict": "supported",
+            "reason": "Claims hold, but the second half is missing.",
+            "unsupported_claims": [],
+            "unaddressed_parts": ["what the library still lacks"],
+            "impossible": False,
+        }
+    )
+    assert [item.kind for item in problems] == [GateProblemKind.unaddressed_part]
+    assert all(item.hard for item in problems)
+
+
+def test_impossible_stops_retries_and_ignores_leftover_parts():
+    problems = _problems_from_payload(
+        {
+            "verdict": "supported",
+            "reason": "No paper in the library covers this.",
+            "unsupported_claims": [],
+            "unaddressed_parts": ["a comparison table"],
+            "impossible": True,
+        }
+    )
+    kinds = [item.kind for item in problems]
+    assert GateProblemKind.impossible in kinds
+    assert GateProblemKind.unaddressed_part not in kinds
+
+
+def test_supported_with_no_leftover_is_still_empty():
+    assert (
+        _problems_from_payload(
+            {
+                "verdict": "supported",
+                "reason": "ok",
+                "unsupported_claims": [],
+            }
+        )
+        == []
+    )

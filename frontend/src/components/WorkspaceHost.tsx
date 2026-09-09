@@ -1,4 +1,11 @@
-import { ClipboardList, Columns2, MessageSquareText, Mic, X } from 'lucide-react';
+import {
+  BookOpen,
+  ClipboardList,
+  Columns2,
+  MessageSquareText,
+  Mic,
+  X,
+} from 'lucide-react';
 import { useState } from 'react';
 import styles from './WorkspaceHost.module.css';
 import type { ChatTurn, CompareResponse, WorkspaceState } from '../types';
@@ -9,9 +16,10 @@ import {
 } from './CompareResult';
 import { ChatThread } from './ChatThread';
 import { EvalPanel } from './EvalPanel';
+import { Library } from './Library';
 import { VoiceNotes } from './VoiceNotes';
 
-type WorkspaceTab = 'conversation' | 'panel';
+type WorkspaceTab = 'conversation' | 'library' | 'panel';
 
 function workspaceTitle(workspace: WorkspaceState): string {
   if (workspace.module === 'compare') {
@@ -56,36 +64,23 @@ export function WorkspaceHost({
   workspace,
   turns,
   onClose,
-  showComposer = false,
   composerSlotRef,
 }: {
   workspace: WorkspaceState | null;
   turns: ChatTurn[];
   onClose: () => void;
-  showComposer?: boolean;
   composerSlotRef?: (node: HTMLDivElement | null) => void;
 }) {
   const [tab, setTab] = useState<WorkspaceTab>('conversation');
   const [workspaceSnapshot, setWorkspaceSnapshot] = useState(workspace);
-  const hasConversation = turns.length > 0;
 
   if (workspace !== workspaceSnapshot) {
     setWorkspaceSnapshot(workspace);
     setTab(workspace ? 'panel' : 'conversation');
   }
 
-  if (!workspace && !hasConversation) {
-    return (
-      <div className={styles.empty}>
-        <p className={styles.emptyText}>
-          Send a message in Chat. The conversation appears here. Compare tables
-          and voice notes still open in this panel when a task needs them.
-        </p>
-      </div>
-    );
-  }
-
   const showingPanel = tab === 'panel' && workspace != null;
+  const showingLibrary = tab === 'library';
   const PanelIcon =
     workspace?.module === 'compare'
       ? Columns2
@@ -96,21 +91,41 @@ export function WorkspaceHost({
   return (
     <section
       className={styles.host}
-      aria-label={showingPanel && workspace ? workspaceTitle(workspace) : 'Conversation'}
+      aria-label={
+        showingPanel && workspace
+          ? workspaceTitle(workspace)
+          : showingLibrary
+            ? 'Library'
+            : 'Conversation'
+      }
     >
       <div className={styles.bar}>
-        {hasConversation && workspace ? (
-          <div className={styles.tabs} role="tablist" aria-label="Workspace views">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={!showingPanel}
-              className={`${styles.tab} ${!showingPanel ? styles.tabActive : ''}`}
-              onClick={() => setTab('conversation')}
-            >
-              <MessageSquareText className={styles.barIcon} />
-              Conversation
-            </button>
+        <div
+          className={styles.tabs}
+          role="tablist"
+          aria-label="Workspace views"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'conversation'}
+            className={`${styles.tab} ${tab === 'conversation' ? styles.tabActive : ''}`}
+            onClick={() => setTab('conversation')}
+          >
+            <MessageSquareText className={styles.barIcon} />
+            Conversation
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={showingLibrary}
+            className={`${styles.tab} ${showingLibrary ? styles.tabActive : ''}`}
+            onClick={() => setTab('library')}
+          >
+            <BookOpen className={styles.barIcon} />
+            Library
+          </button>
+          {workspace ? (
             <button
               type="button"
               role="tab"
@@ -121,22 +136,8 @@ export function WorkspaceHost({
               <PanelIcon className={styles.barIcon} />
               {workspaceTitle(workspace)}
             </button>
-          </div>
-        ) : (
-          <div className={styles.barTitle}>
-            {showingPanel && workspace ? (
-              <>
-                <PanelIcon className={styles.barIcon} />
-                <h2>{workspaceTitle(workspace)}</h2>
-              </>
-            ) : (
-              <>
-                <MessageSquareText className={styles.barIcon} />
-                <h2>Conversation</h2>
-              </>
-            )}
-          </div>
-        )}
+          ) : null}
+        </div>
         {workspace && (
           <button
             type="button"
@@ -158,10 +159,14 @@ export function WorkspaceHost({
             <VoiceNotes />
           )}
         </div>
+      ) : showingLibrary ? (
+        <div className={styles.body}>
+          <Library />
+        </div>
       ) : (
         <ChatThread turns={turns} />
       )}
-      {showComposer ? (
+      {tab === 'conversation' ? (
         <div className={styles.composerDock} ref={composerSlotRef} />
       ) : null}
     </section>
