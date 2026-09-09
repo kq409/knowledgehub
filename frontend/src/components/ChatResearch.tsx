@@ -386,10 +386,6 @@ export function ChatResearch({
 }: ChatResearchProps) {
   const [question, setQuestion] = useState('');
   const [turns, setTurns] = useState<ChatTurn[]>([]);
-  const [includePapers, setIncludePapers] = useState(true);
-  const [includeVoiceNotes, setIncludeVoiceNotes] = useState(true);
-  const [includeHandwrittenNotes, setIncludeHandwrittenNotes] = useState(true);
-  const [includeDocuments, setIncludeDocuments] = useState(true);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
@@ -453,14 +449,8 @@ export function ChatResearch({
     };
   }, [conversationId]);
 
-  const hasSource =
-    includePapers ||
-    includeVoiceNotes ||
-    includeHandwrittenNotes ||
-    includeDocuments;
   const canSend =
     (question.trim().length > 0 || attachments.length > 0) &&
-    hasSource &&
     !isRunning &&
     !speech.isTranscribing &&
     !(speech.isListening && !speech.supportsLive);
@@ -522,10 +512,6 @@ export function ChatResearch({
       setError('Enter a question or attach a file.');
       return;
     }
-    if (!hasSource) {
-      setError('Select at least one source.');
-      return;
-    }
     if (speechRef.current.isListening) {
       speechRef.current.stop();
     }
@@ -569,13 +555,6 @@ export function ChatResearch({
         'messages',
         JSON.stringify([...history, { role: 'user', content: userText }])
       );
-      formData.append('include_papers', String(includePapers));
-      formData.append('include_voice_notes', String(includeVoiceNotes));
-      formData.append(
-        'include_handwritten_notes',
-        String(includeHandwrittenNotes)
-      );
-      formData.append('include_documents', String(includeDocuments));
       if (conversationId) {
         formData.append('conversation_id', conversationId);
       }
@@ -806,11 +785,6 @@ export function ChatResearch({
     question,
     attachments,
     turns,
-    hasSource,
-    includePapers,
-    includeVoiceNotes,
-    includeHandwrittenNotes,
-    includeDocuments,
     conversationId,
     updateLastTurn,
   ]);
@@ -850,42 +824,6 @@ export function ChatResearch({
           </button>
         </div>
       )}
-
-      <fieldset className={styles.sources} disabled={isRunning}>
-        <legend className={styles.legend}>Sources</legend>
-        <label className={styles.check}>
-          <input
-            type="checkbox"
-            checked={includePapers}
-            onChange={(e) => setIncludePapers(e.target.checked)}
-          />
-          Papers
-        </label>
-        <label className={styles.check}>
-          <input
-            type="checkbox"
-            checked={includeVoiceNotes}
-            onChange={(e) => setIncludeVoiceNotes(e.target.checked)}
-          />
-          Voice notes
-        </label>
-        <label className={styles.check}>
-          <input
-            type="checkbox"
-            checked={includeHandwrittenNotes}
-            onChange={(e) => setIncludeHandwrittenNotes(e.target.checked)}
-          />
-          Handwritten
-        </label>
-        <label className={styles.check}>
-          <input
-            type="checkbox"
-            checked={includeDocuments}
-            onChange={(e) => setIncludeDocuments(e.target.checked)}
-          />
-          Documents
-        </label>
-      </fieldset>
 
       {attachments.length > 0 && (
         <ul className={styles.chips}>

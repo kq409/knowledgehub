@@ -212,6 +212,7 @@ def test_every_schema_has_a_handler():
 def test_catalog_describes_arguments():
     catalog = tool_catalog()
     assert "search_library(query: string" in catalog
+    assert "Omit sources to search all" in catalog
     assert "list_papers(no arguments)" in catalog
     assert "present_workspace(module: string)" in catalog
 
@@ -294,6 +295,16 @@ async def test_search_library_labels_notes_distinctly(library: Library):
         citation.source_type.value == "voice"
         for citation in library.ctx.registry.citations()
     )
+
+
+async def test_search_library_infers_sources_from_the_question(library: Library):
+    library.ctx.question = "Search my voice notes for baseline doubts"
+    result = await search_library(library.ctx, query="baseline doubts")
+
+    assert NOTE_DISCLAIMER in result.content
+    citations = library.ctx.registry.citations()
+    assert citations
+    assert all(citation.source_type.value == "voice" for citation in citations)
 
 
 async def test_search_library_requires_a_query(library: Library):

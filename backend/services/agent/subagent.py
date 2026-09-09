@@ -145,6 +145,8 @@ async def run_spawned_subagent(
         include_papers=parent_ctx.include_papers,
         include_voice_notes=parent_ctx.include_voice_notes,
         include_handwritten_notes=parent_ctx.include_handwritten_notes,
+        include_documents=parent_ctx.include_documents,
+        question=parent_ctx.question,
         top_k=parent_ctx.top_k,
         compare=None,
         extraction=None,

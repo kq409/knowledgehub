@@ -104,7 +104,7 @@ __all__ = [
 
 PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "chat_agent_prompt.txt"
 AGENT_PROMPT = PROMPT_FILE.read_text().strip()
-PROMPT_VERSION = "chat-agent-v11"
+PROMPT_VERSION = "chat-agent-v12"
 
 MAX_ITERATIONS = 8
 # How many of one assistant message's tool calls actually run. A model that
@@ -350,6 +350,7 @@ class ResearchAgent:
             include_voice_notes=payload.include_voice_notes,
             include_handwritten_notes=payload.include_handwritten_notes,
             include_documents=payload.include_documents,
+            question=payload.messages[-1].content if payload.messages else None,
             top_k=payload.top_k,
             compare=self.compare,
             extraction=self.extraction,

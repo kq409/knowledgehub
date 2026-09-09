@@ -19,7 +19,12 @@ from openai import OpenAI
 
 from services.agent.protocol import ToolCall
 from services.agent.telemetry import log_warning
-from services.agent.tools import TOOL_HANDLERS, TOOL_SCHEMAS, tool_catalog
+from services.agent.tools import (
+    TOOL_HANDLERS,
+    TOOL_SCHEMAS,
+    infer_library_sources,
+    tool_catalog,
+)
 from services.llm_chat import complete_json_object, effort_from_env
 
 PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "chat_planner_prompt.txt"
@@ -46,6 +51,24 @@ _NAMED_LOOKUP = re.compile(
 _SKIP_ACRONYMS = frozenset(
     {"PDF", "DOI", "URL", "HTTP", "HTTPS", "JSON", "HTML", "LLM"}
 )
+_INVENTORY = re.compile(
+    r"(?:"
+    r"\b(?:library|collection)\s+status\b|"
+    r"\bstatus\s+of\s+(?:my|the|this)\s+library\b|"
+    r"\boverview\b.{0,40}\blibrary\b|"
+    r"\blibrary\b.{0,40}\boverview\b|"
+    r"\b(?:what(?:'s|s)?|whats)\s+in\s+(?:my|the|this)\s+library\b|"
+    r"\bwhat\s+(?:is|are)\s+in\s+(?:my|the|this)\s+library\b|"
+    r"\bwhat\s+does\s+(?:my|the|this)\s+library\s+(?:hold|contain|have)\b|"
+    r"\b(?:library|collection)\s+(?:contents?|inventory|holdings?|coverage)\b|"
+    r"\bhow\s+many\s+(?:papers?|notes?|documents?|items?)\b|"
+    r"\bcheck\s+(?:my|the|this)\s+library\b|"
+    r"\blist\s+(?:my|the\s+)?(?:papers?|notes?|documents?|library)\b|"
+    r"\bwhat\s+(?:papers?|notes?|documents?)\s+(?:do\s+i|are\s+in)\b"
+    r")",
+    re.IGNORECASE | re.DOTALL,
+)
+INVENTORY_TOOLS = ("list_papers", "list_notes", "list_documents")
 
 
 @dataclass(frozen=True)
@@ -147,6 +170,28 @@ def fallback_search_query(question: str) -> str | None:
     return None
 
 
+def apply_inferred_sources(plan: ToolPlan, question: str) -> ToolPlan:
+    """Fill search_library.sources from the question when the plan omitted them."""
+    if plan.failed or not plan.calls:
+        return plan
+    sources = infer_library_sources(question)
+    if sources is None:
+        return plan
+    calls: list[ToolCall] = []
+    for call in plan.calls:
+        if call.name == "search_library" and "sources" not in call.arguments:
+            calls.append(
+                ToolCall(
+                    id=call.id,
+                    name=call.name,
+                    arguments={**call.arguments, "sources": sources},
+                )
+            )
+        else:
+            calls.append(call)
+    return ToolPlan(calls=calls)
+
+
 def ensure_library_search(plan: ToolPlan, question: str) -> ToolPlan:
     """Search the library when the planner returned nothing for a named work."""
     if plan.failed or plan.calls:
@@ -154,13 +199,40 @@ def ensure_library_search(plan: ToolPlan, question: str) -> ToolPlan:
     query = fallback_search_query(question)
     if not query:
         return plan
+    arguments: dict[str, object] = {"query": query}
+    sources = infer_library_sources(question)
+    if sources is not None:
+        arguments["sources"] = sources
     return ToolPlan(
         calls=[
             ToolCall(
                 id=f"plan_{uuid.uuid4().hex[:12]}",
                 name="search_library",
-                arguments={"query": query},
+                arguments=arguments,
             )
+        ]
+    )
+
+
+def is_library_inventory_question(question: str) -> bool:
+    """True when the message asks what the library holds, not a named work."""
+    return bool(_INVENTORY.search(question))
+
+
+def ensure_library_inventory(plan: ToolPlan, question: str) -> ToolPlan:
+    """List papers, notes, and documents when an empty plan asked for status."""
+    if plan.failed or plan.calls:
+        return plan
+    if not is_library_inventory_question(question):
+        return plan
+    return ToolPlan(
+        calls=[
+            ToolCall(
+                id=f"plan_{uuid.uuid4().hex[:12]}",
+                name=name,
+                arguments={},
+            )
+            for name in INVENTORY_TOOLS
         ]
     )
 
@@ -223,4 +295,6 @@ async def plan_tools(
 
     if not isinstance(payload, dict):
         return ToolPlan(failed=True)
-    return ensure_library_search(ToolPlan(calls=calls_from_payload(payload)), question)
+    plan = ensure_library_search(ToolPlan(calls=calls_from_payload(payload)), question)
+    plan = ensure_library_inventory(plan, question)
+    return apply_inferred_sources(plan, question)

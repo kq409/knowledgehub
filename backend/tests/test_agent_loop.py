@@ -364,12 +364,7 @@ async def test_dsml_leaked_into_content_runs_as_tool_calls(library: Library):
     ]
     agent = native_protocol_agent(client)
 
-    events = [
-        event
-        async for event in agent.run(
-            library.session, ask("give me an overview on my Library")
-        )
-    ]
+    events = [event async for event in agent.run(library.session, ask("Hello"))]
 
     assert [data["name"] for data in events_of(events, ChatEventType.tool_call)] == [
         "list_papers",
@@ -851,6 +846,31 @@ async def test_empty_plan_still_searches_a_named_acronym(library: Library):
         "search_library"
     ]
     assert "GEM" in events_of(events, ChatEventType.tool_call)[0]["arguments"]["query"]
+
+
+async def test_empty_plan_lists_collections_for_library_status(library: Library):
+    client = scripted_llm(
+        planned(),
+        "Your library holds 1 paper from 2006.",
+    )
+    agent = text_protocol_agent(client)
+
+    events = [
+        event
+        async for event in agent.run(
+            library.session, ask("Check my library status please.")
+        )
+    ]
+
+    assert [data["name"] for data in events_of(events, ChatEventType.tool_call)] == [
+        "list_papers",
+        "list_notes",
+        "list_documents",
+    ]
+    assert (
+        "Your library holds 1 paper"
+        in events_of(events, ChatEventType.token)[0]["text"]
+    )
 
 
 async def test_empty_plan_retry_enables_tools(library: Library):

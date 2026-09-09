@@ -9,6 +9,7 @@ to the model.
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -93,6 +94,36 @@ VOICE_SOURCE = "voice_notes"
 HANDWRITTEN_SOURCE = "handwritten_notes"
 DOCUMENT_SOURCE = "documents"
 ALL_SOURCES = (PAPER_SOURCE, VOICE_SOURCE, HANDWRITTEN_SOURCE, DOCUMENT_SOURCE)
+
+_VOICE_NOTES = re.compile(r"\bvoice\s+(?:notes?|recordings?)\b", re.IGNORECASE)
+_HANDWRITTEN = re.compile(r"\bhandwritten(?:\s+notes?)?\b", re.IGNORECASE)
+_DOCUMENTS = re.compile(r"\bdocuments?\b", re.IGNORECASE)
+_PAPERS = re.compile(r"\bpapers?\b", re.IGNORECASE)
+_NOTES = re.compile(r"\bnotes?\b", re.IGNORECASE)
+
+
+def infer_library_sources(question: str) -> list[str] | None:
+    """Sources the question named, or None to keep the all-sources default."""
+    has_voice = bool(_VOICE_NOTES.search(question))
+    has_handwritten = bool(_HANDWRITTEN.search(question))
+    has_documents = bool(_DOCUMENTS.search(question))
+    has_papers = bool(_PAPERS.search(question))
+    has_generic_notes = (
+        bool(_NOTES.search(question)) and not has_voice and not has_handwritten
+    )
+
+    found: list[str] = []
+    if has_papers:
+        found.append(PAPER_SOURCE)
+    if has_voice or has_generic_notes:
+        found.append(VOICE_SOURCE)
+    if has_handwritten or has_generic_notes:
+        found.append(HANDWRITTEN_SOURCE)
+    if has_documents:
+        found.append(DOCUMENT_SOURCE)
+    if not found or set(found) == set(ALL_SOURCES):
+        return None
+    return found
 
 
 class ToolError(Exception):
@@ -324,6 +355,7 @@ class ToolContext:
     include_voice_notes: bool = True
     include_handwritten_notes: bool = True
     include_documents: bool = True
+    question: str | None = None
     top_k: int | None = None
     compare: CompareService | None = None
     extraction: ExtractionService | None = None
@@ -434,7 +466,12 @@ async def search_library(ctx: ToolContext, **kwargs: object) -> ToolResult:
     if not allowed:
         raise ToolError("The researcher disabled every source for this conversation")
 
-    sources = _requested_sources(kwargs.get("sources"), allowed)
+    requested = kwargs.get("sources")
+    if requested is None and ctx.question:
+        inferred = infer_library_sources(ctx.question)
+        if inferred is not None:
+            requested = inferred
+    sources = _requested_sources(requested, allowed)
     if not sources:
         raise ToolError(
             f"None of the requested sources are enabled. Enabled: {allowed}."
@@ -1656,7 +1693,9 @@ TOOL_SCHEMAS: list[dict] = [
             "name": "search_library",
             "description": (
                 "Semantic and keyword search over the researcher's papers, "
-                "notes, and documents. Short names match title initialisms "
+                "notes, and documents. Omit sources to search all of them; "
+                "pass a subset when the researcher asked for a specific kind. "
+                "Short names match title initialisms "
                 "(GEM finds Gradient Episodic Memory). Returns numbered "
                 "chunks you may cite as [n]."
             ),
@@ -1670,7 +1709,12 @@ TOOL_SCHEMAS: list[dict] = [
                     "sources": {
                         "type": "array",
                         "items": {"type": "string", "enum": list(ALL_SOURCES)},
-                        "description": "Which sources to search. Defaults to all enabled ones.",
+                        "description": (
+                            "Which sources to search: papers, voice_notes, "
+                            "handwritten_notes, documents. Omit to search all "
+                            "of them. Pass a subset only when the researcher "
+                            "asked for those kinds."
+                        ),
                     },
                     "top_k": {
                         "type": "integer",

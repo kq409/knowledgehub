@@ -6,8 +6,10 @@ Rules:
 - Select a tool only if the reply would use what that tool returns.
 - If the message can be answered without any tool result, return an empty list.
 - If the researcher names a paper, method, acronym, or short title, or asks for a summary of something, you MUST include search_library with that name as the query. Do not return an empty list to ask which one they mean — look it up first. Short names in this library often match a title's initialism (GEM for Gradient Episodic Memory).
+- search_library searches every library source by default. Pass sources only when the researcher asked for a specific kind (papers, voice_notes, handwritten_notes, documents).
 - Use earlier messages only to resolve what the latest message refers to (an acronym, "it", "that paper").
-- Do not call list_papers, list_notes, or list_documents just to orient yourself. Use them when the message asks what the library holds, for an overview or inventory, or when the reply needs those ids. For a library overview, prefer list_* and do not add read_paper unless a stored summary is missing.
+- If the researcher asks for library status, overview, inventory, contents, coverage, or what the library holds, you MUST include list_papers, list_notes, and list_documents. Do not return an empty list to ask which collection they mean.
+- Do not call list_papers, list_notes, or list_documents just to orient yourself. Use them when the message asks what the library holds, for an overview, status, or inventory, or when the reply needs those ids. For a library overview or status, prefer list_* and do not add read_paper unless a stored summary is missing.
 - Prefer the smallest set. At most three tools.
 - Return ONLY JSON matching {"tools": [{"name": "...", "input": {...}}]}. Use [] when no tool is needed. Use {} for input when the tool takes no arguments.
 - No labels for the kind of message. No prose.
