@@ -16,6 +16,7 @@ import type {
   TodoStatus,
 } from '../types';
 import { MarkdownAnswer } from './MarkdownAnswer';
+import { compactAnswerCitations } from '../citations';
 import { Spinner } from './Spinner';
 import {
   CompactionNotices,
@@ -268,6 +269,7 @@ function Citations({ citations }: { citations: ChatCitation[] }) {
 function AssistantBody({ turn }: { turn: ChatTurn }) {
   const isRetrying = turn.isRunning && turn.verdict?.status === 'retrying';
   const notice = turn.isRunning ? null : verdictNotice(turn.verdict);
+  const visible = compactAnswerCitations(turn.answer, turn.citations);
 
   return (
     <div className={styles.assistant}>
@@ -307,7 +309,7 @@ function AssistantBody({ turn }: { turn: ChatTurn }) {
         <TurnArtifact key={artifactIndex} artifact={artifact} />
       ))}
 
-      {turn.answer && <MarkdownAnswer text={turn.answer} />}
+      {visible.answer && <MarkdownAnswer text={visible.answer} />}
 
       {turn.error && (
         <p className={styles.caveat} role="status">
@@ -317,7 +319,7 @@ function AssistantBody({ turn }: { turn: ChatTurn }) {
 
       {turn.model && <p className={styles.modelMeta}>{turn.model}</p>}
 
-      <Citations citations={turn.citations} />
+      <Citations citations={visible.citations} />
     </div>
   );
 }

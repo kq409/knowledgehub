@@ -11,6 +11,7 @@ from services.agent.gate import (
     _problems_from_payload,
     _short_reason,
     check_deterministic,
+    compact_answer_citations,
     extract_citation_indices,
     gate_mode_from_env,
     is_local_endpoint,
@@ -58,6 +59,43 @@ def test_grouped_citations_count_individually():
 
 def test_markdown_links_are_not_citations():
     assert extract_citation_indices("See [the paper](http://x) for more.") == set()
+    assert extract_citation_indices("See [1](http://x) for more.") == set()
+
+
+def test_compact_drops_unread_footnotes_and_renumbers_from_one():
+    answer, citations = compact_answer_citations(
+        "ELLA is a lifelong learner [3].",
+        [citation(1), citation(2), citation(3, "shared basis"), citation(6)],
+    )
+    assert answer == "ELLA is a lifelong learner [1]."
+    assert [item.index for item in citations] == [1]
+    assert citations[0].snippet == "shared basis"
+
+
+def test_compact_keeps_first_appearance_order():
+    answer, citations = compact_answer_citations(
+        "Later work [5] builds on ELLA [3].",
+        [citation(3, "ella"), citation(5, "later")],
+    )
+    assert answer == "Later work [1] builds on ELLA [2]."
+    assert [item.snippet for item in citations] == ["later", "ella"]
+
+
+def test_compact_rewrites_grouped_citations():
+    answer, citations = compact_answer_citations(
+        "Both agree [3, 5].",
+        [citation(3, "a"), citation(5, "b"), citation(9)],
+    )
+    assert answer == "Both agree [1, 2]."
+    assert [item.snippet for item in citations] == ["a", "b"]
+
+
+def test_compact_leaves_an_uncited_answer_without_footnotes():
+    answer, citations = compact_answer_citations(
+        "No numbers here.", [citation(1), citation(2)]
+    )
+    assert answer == "No numbers here."
+    assert citations == []
 
 
 def test_a_number_no_tool_handed_out_is_a_hard_failure():

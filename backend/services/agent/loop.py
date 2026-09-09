@@ -32,7 +32,7 @@ from services.agent.compact import (
     repair_tool_pairing,
 )
 from services.agent.events import AgentEvent, EventSink
-from services.agent.gate import EvidenceGate, GateVerdict
+from services.agent.gate import EvidenceGate, GateVerdict, compact_answer_citations
 from services.agent.hooks import (
     Approver,
     HookChain,
@@ -978,12 +978,13 @@ class ResearchAgent:
                 tool_calls_made=state.tool_calls_made,
             )
 
-        if not answer:
-            yield AgentEvent(type=ChatEventType.error, data={"message": EMPTY_ANSWER})
-        else:
-            yield AgentEvent(type=ChatEventType.token, data={"text": answer})
-
         citations: list[ChatCitation] = state.registry.citations()
+        if answer:
+            answer, citations = compact_answer_citations(answer, citations)
+            yield AgentEvent(type=ChatEventType.token, data={"text": answer})
+        else:
+            yield AgentEvent(type=ChatEventType.error, data={"message": EMPTY_ANSWER})
+
         yield AgentEvent(
             type=ChatEventType.citations,
             data={"citations": [item.model_dump(mode="json") for item in citations]},

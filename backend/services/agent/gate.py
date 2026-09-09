@@ -43,7 +43,7 @@ JUDGE_SNIPPET_CHARS = 700
 MAX_JUDGE_CLAIMS = 3
 MAX_REASON_CHARS = 240
 
-CITATION_PATTERN = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+CITATION_PATTERN = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\](?!\()")
 
 LOCAL_HOSTNAMES = {
     "localhost",
@@ -143,6 +143,44 @@ def extract_citation_indices(answer: str) -> set[int]:
     for group in CITATION_PATTERN.findall(answer):
         found.update(int(part) for part in group.split(","))
     return found
+
+
+def compact_answer_citations(
+    answer: str, citations: list[ChatCitation]
+) -> tuple[str, list[ChatCitation]]:
+    """Keep only citations the answer actually uses, numbered from 1.
+
+    Tool calls register every snippet they return. The model often cites a
+    subset, which left the footnote list longer than the prose and starting
+    at a number other than [1]. Appearance order in the answer wins.
+    """
+    by_index = {item.index: item for item in citations}
+    used: list[int] = []
+    seen: set[int] = set()
+    for group in CITATION_PATTERN.findall(answer):
+        for part in group.split(","):
+            number = int(part)
+            if number in by_index and number not in seen:
+                seen.add(number)
+                used.append(number)
+    if not used:
+        return answer, []
+
+    mapping = {old: new for new, old in enumerate(used, start=1)}
+
+    def replace(match: re.Match[str]) -> str:
+        numbers = [int(part) for part in match.group(1).split(",")]
+        if not any(number in mapping for number in numbers):
+            return match.group(0)
+        remapped = ", ".join(str(mapping.get(number, number)) for number in numbers)
+        return f"[{remapped}]"
+
+    rewritten = CITATION_PATTERN.sub(replace, answer)
+    compacted = [
+        by_index[old].model_copy(update={"index": new})
+        for new, old in enumerate(used, start=1)
+    ]
+    return rewritten, compacted
 
 
 def is_local_endpoint(base_url: str | None) -> bool:
