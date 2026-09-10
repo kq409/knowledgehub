@@ -1,12 +1,12 @@
 import os
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Note, NoteChunk, ProcessingStatus
+from services.accession import apply_processing_outcome, mark_processing_fields
 from services.chunking import ParsedChunk, split_with_overlap
 from services.embeddings import EmbeddingService
 from services.note_parser import NotePdfParser, ParsedNotePdf
@@ -123,9 +123,7 @@ async def apply_pdf_parse_result(
     note.title = parsed.title or note.title
     note.extracted_text = parsed.extracted_text
     note.page_count = parsed.page_count
-    note.processing_status = ProcessingStatus.ready.value
-    note.processing_error = None
-    note.updated_at = datetime.now(UTC)
+    apply_processing_outcome(note, chunk_count=len(parsed.chunks))
     await replace_note_chunks(session, note, parsed.chunks, embeddings)
     await session.commit()
     await session.refresh(note)
@@ -138,9 +136,7 @@ async def apply_text_chunks(
     chunks: list[ParsedChunk],
     embeddings: list[list[float]],
 ) -> Note:
-    note.processing_status = ProcessingStatus.ready.value
-    note.processing_error = None
-    note.updated_at = datetime.now(UTC)
+    apply_processing_outcome(note, chunk_count=len(chunks))
     await replace_note_chunks(session, note, chunks, embeddings)
     await session.commit()
     await session.refresh(note)
@@ -156,9 +152,7 @@ async def mark_note_status(
     note = await session.get(Note, note_id)
     if note is None:
         return
-    note.processing_status = status.value
-    note.processing_error = error
-    note.updated_at = datetime.now(UTC)
+    mark_processing_fields(note, status.value, error)
     await session.commit()
 
 

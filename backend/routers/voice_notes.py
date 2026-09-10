@@ -20,6 +20,7 @@ from schemas import (
     NoteSourceType as NoteSourceTypeSchema,
 )
 from services.extraction import ExtractionService, NoteExtractionError
+from services.identity import Identity, IdentityDep, require_visible
 
 router = APIRouter(prefix="/api/voice-notes", tags=["voice-notes"])
 
@@ -39,10 +40,13 @@ def _as_voice_response(note: Note) -> VoiceNoteResponse:
     return VoiceNoteResponse.model_validate(note)
 
 
-async def _require_voice_note(session: AsyncSession, note_id: uuid.UUID) -> Note:
+async def _require_voice_note(
+    session: AsyncSession, note_id: uuid.UUID, identity: Identity
+) -> Note:
     note = await session.get(Note, note_id)
     if note is None or note.source_type != NoteSourceType.voice.value:
         raise HTTPException(status_code=404, detail="Voice note not found")
+    require_visible(note, identity, kind="Note")
     return note
 
 
@@ -86,9 +90,10 @@ async def create_voice_note(
     request: Request,
     session: SessionDep,
     payload: VoiceNoteCreate,
+    identity: IdentityDep,
 ):
     created = await create_note(
-        request, session, NoteCreate.model_validate(payload.model_dump())
+        request, session, NoteCreate.model_validate(payload.model_dump()), identity
     )
     note = await session.get(Note, created.id)
     if note is None:
@@ -97,14 +102,16 @@ async def create_voice_note(
 
 
 @router.get("", response_model=list[VoiceNoteResponse])
-async def list_voice_notes(session: SessionDep):
-    notes = await list_notes(session, source_type=NoteSourceTypeSchema.voice)
+async def list_voice_notes(session: SessionDep, identity: IdentityDep):
+    notes = await list_notes(session, identity, source_type=NoteSourceTypeSchema.voice)
     return [VoiceNoteResponse.model_validate(item.model_dump()) for item in notes]
 
 
 @router.get("/{note_id}", response_model=VoiceNoteResponse)
-async def get_voice_note(note_id: uuid.UUID, session: SessionDep):
-    note = await _require_voice_note(session, note_id)
+async def get_voice_note(
+    note_id: uuid.UUID, session: SessionDep, identity: IdentityDep
+):
+    note = await _require_voice_note(session, note_id, identity)
     return _as_voice_response(note)
 
 
@@ -114,13 +121,15 @@ async def update_voice_note(
     note_id: uuid.UUID,
     payload: VoiceNoteUpdate,
     session: SessionDep,
+    identity: IdentityDep,
 ):
-    await _require_voice_note(session, note_id)
+    await _require_voice_note(session, note_id, identity)
     updated = await update_note(
         request,
         note_id,
         NoteUpdate.model_validate(payload.model_dump(exclude_unset=True)),
         session,
+        identity,
     )
     note = await session.get(Note, updated.id)
     if note is None:
@@ -129,6 +138,8 @@ async def update_voice_note(
 
 
 @router.delete("/{note_id}", status_code=204)
-async def delete_voice_note(note_id: uuid.UUID, session: SessionDep):
-    await _require_voice_note(session, note_id)
-    await delete_note(note_id, session)
+async def delete_voice_note(
+    note_id: uuid.UUID, session: SessionDep, identity: IdentityDep
+):
+    await _require_voice_note(session, note_id, identity)
+    await delete_note(note_id, session, identity)

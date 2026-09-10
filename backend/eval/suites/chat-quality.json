@@ -1,0 +1,215 @@
+{
+  "suite": "chat-quality",
+  "trials": 3,
+  "tasks": [
+    {
+      "id": "grounded-ella-transfer",
+      "kind": "capability",
+      "query": "What does ZXQELLA7 claim about transferring models across tasks?",
+      "reference": {
+        "answer": "ZXQELLA7 transfers sparse models across tasks without catastrophic forgetting [1].",
+        "tools_called": ["search_library", "read_paper"],
+        "citations": [{ "index": 1 }],
+        "gate_status": "supported"
+      },
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_paper", "read_note"],
+          "required": false
+        },
+        { "type": "must_include_facts", "facts": ["sparse", "transfer"] },
+        { "type": "citations", "require_indices": true },
+        { "type": "transcript", "max_tool_calls": 8 },
+        { "type": "faithfulness" }
+      ]
+    },
+    {
+      "id": "grounded-cnn-photos",
+      "kind": "capability",
+      "query": "What does ZXQCNN7 say about classifying photographs?",
+      "reference": {
+        "answer": "ZXQCNN7 convolutional networks classify photographs of objects [1].",
+        "tools_called": ["search_library", "read_paper"],
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_paper"],
+          "required": false
+        },
+        { "type": "must_include_facts", "facts": ["photograph"] },
+        { "type": "citations", "require_indices": true }
+      ]
+    },
+    {
+      "id": "grounded-bert-attention",
+      "kind": "capability",
+      "query": "According to my library, how does ZXQBERT7 mix tokens?",
+      "reference": {
+        "answer": "ZXQBERT7 mixes tokens with bidirectional self-attention instead of recurrence [1].",
+        "tools_called": ["search_library", "read_paper"],
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_paper"],
+          "required": false
+        },
+        { "type": "must_include_facts", "facts": ["attention"] }
+      ]
+    },
+    {
+      "id": "note-hypothesis",
+      "kind": "capability",
+      "query": "What hypothesis did I record about ZXQELLA7 transfer?",
+      "reference": {
+        "answer": "The voice note hypothesizes that ZXQELLA7 transfer will work on robot tasks [1].",
+        "tools_called": ["search_library", "read_note"],
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_note", "list_notes"],
+          "required": false
+        },
+        { "type": "must_include_facts", "facts": ["robot"] }
+      ]
+    },
+    {
+      "id": "read-vae",
+      "kind": "capability",
+      "query": "Open the ZXQVAE7 paper and summarize what the encoder does.",
+      "reference": {
+        "answer": "The ZXQVAE7 encoder maps inputs to a Gaussian posterior over latents [1].",
+        "tools_called": ["read_paper"],
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["read_paper", "search_library"],
+          "required": false
+        },
+        { "type": "must_include_facts", "facts": ["encoder"] }
+      ]
+    },
+    {
+      "id": "multi-part-compare-then-gap",
+      "kind": "capability",
+      "query": "Compare ZXQELLA7 and ZXQCNN7, then say what this library still lacks on transfer learning.",
+      "reference": {
+        "answer": "ZXQELLA7 studies sparse lifelong transfer; ZXQCNN7 classifies photographs. The library lacks a dedicated survey of transfer-learning gaps beyond these two papers [1].",
+        "tools_called": ["compare_papers"],
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": [
+            "compare_papers",
+            "search_library",
+            "read_paper",
+            "list_papers"
+          ],
+          "required": false
+        },
+        { "type": "must_include_facts", "facts": ["ELLA", "CNN"] }
+      ]
+    },
+    {
+      "id": "skill-cite-from-library",
+      "kind": "capability",
+      "query": "Load the cite-from-library skill, then cite ZXQELLA7's transfer claim using those rules.",
+      "reference": {
+        "answer": "ZXQELLA7 transfers sparse models across tasks [1].",
+        "tools_called": ["load_skill", "search_library", "read_paper"],
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["load_skill"],
+          "required": false
+        },
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_paper"],
+          "required": false
+        },
+        { "type": "citations", "require_indices": true }
+      ]
+    },
+    {
+      "id": "should-web-search-sota",
+      "kind": "capability",
+      "query": "What is the SOTA robot learning algorithm so far in 2026? Search outside the library if needed.",
+      "reference": {
+        "answer": "The library does not have enough evidence for 2026 SOTA. Web search is the right next step; this reference does not invent a ranking.",
+        "tools_called": ["search_library", "web_search"],
+        "citations": []
+      },
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["web_search"],
+          "required": false
+        },
+        {
+          "type": "outcome",
+          "contains_any": [
+            "does not",
+            "cannot",
+            "not enough",
+            "insufficient",
+            "web",
+            "不足以"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "in-scope-ella-synthesis",
+      "kind": "capability",
+      "query": "From the papers in this collection, how does ZXQELLA7 transfer models?",
+      "reference": {
+        "answer": "ZXQELLA7 transfers sparse models across tasks by maintaining a shared basis [1].",
+        "tools_called": ["search_library", "read_paper"],
+        "citations": [{ "index": 1 }],
+        "gate_status": "supported"
+      },
+      "graders": [
+        { "type": "must_include_facts", "facts": ["sparse", "shared"] },
+        { "type": "citations", "require_indices": true },
+        { "type": "transcript", "max_tool_calls": 8 }
+      ]
+    },
+    {
+      "id": "out-of-scope-refuse",
+      "kind": "capability",
+      "query": "Quote the engineering acceptance report ZXQ-HT-2023-014.",
+      "reference": {
+        "answer": "I cannot support that from the records in this collection.",
+        "tools_called": ["search_library"],
+        "citations": []
+      },
+      "graders": [
+        {
+          "type": "outcome",
+          "contains_any": [
+            "cannot support",
+            "does not",
+            "not in",
+            "no evidence",
+            "collection",
+            "无法"
+          ],
+          "excludes": ["ZXQ-HT-2023-014 records hardware"]
+        }
+      ]
+    }
+  ]
+}

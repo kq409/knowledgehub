@@ -4,6 +4,8 @@ export type ReviewStatus = 'generated' | 'draft' | 'reviewed' | 'accepted';
 
 export type ProcessingStatus = 'pending' | 'processing' | 'ready' | 'failed';
 
+export type AccessionStatus = 'received' | 'accessioned' | 'rejected';
+
 export type NoteLinkSource = 'researcher' | 'ai';
 
 export type ConnectReasonMode = 'snippet' | 'llm';
@@ -159,6 +161,9 @@ export interface LibraryNote extends StructuredNoteFields {
   processing_status: ProcessingStatus;
   processing_error: string | null;
   chunk_count: number;
+  revision?: number;
+  sha256?: string | null;
+  accession_status?: AccessionStatus;
   created_at: string;
   updated_at: string;
 }
@@ -179,8 +184,40 @@ export interface Paper {
   processing_status: PaperStatus;
   processing_error: string | null;
   chunk_count: number;
+  revision?: number;
+  sha256?: string | null;
+  accession_status?: AccessionStatus;
   created_at: string;
   updated_at: string;
+}
+
+export type ContentType = 'scholarly_article' | 'research_note' | 'document';
+
+export interface SpaceInfo {
+  id: string;
+  slug: string;
+  name: string;
+}
+
+export interface LibraryRecord {
+  id: string;
+  space_id: string;
+  content_type: ContentType;
+  title: string;
+  status: ProcessingStatus;
+  updated_at: string;
+  snippet?: string | null;
+  highlight?: string | null;
+  revision: number;
+  checksum?: string | null;
+  accession_status?: AccessionStatus;
+}
+
+export interface RecordPage {
+  items: LibraryRecord[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface LibraryDocument {
@@ -192,6 +229,9 @@ export interface LibraryDocument {
   processing_status: ProcessingStatus;
   processing_error: string | null;
   chunk_count: number;
+  revision?: number;
+  sha256?: string | null;
+  accession_status?: AccessionStatus;
   created_at: string;
   updated_at: string;
 }
@@ -459,6 +499,9 @@ export interface ChatResearchProps {
   composerSlot?: HTMLElement | null;
   conversationId?: string | null;
   onConversation?: (conversation: { id: string; title: string }) => void;
+  spaceId?: string | null;
+  spaceName?: string | null;
+  recordIds?: string[];
 }
 
 export interface ChatThreadProps {

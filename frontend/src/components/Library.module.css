@@ -221,6 +221,21 @@
   color: var(--color-accent-red-fg);
 }
 
+.status.received {
+  background: var(--color-accent-amber-bg);
+  color: var(--color-accent-amber-fg);
+}
+
+.status.accessioned {
+  background: var(--color-accent-green-bg);
+  color: var(--color-accent-green-fg);
+}
+
+.status.rejected {
+  background: var(--color-accent-red-bg);
+  color: var(--color-accent-red-fg);
+}
+
 .source.voice {
   background: var(--color-accent-blue-bg);
   color: var(--color-accent-blue-fg);
@@ -421,4 +436,51 @@
   font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.searchRow,
+.uploadRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 160px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.kindLabel {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.kindSelect {
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.scopeCheck {
+  display: flex;
+  align-items: center;
+  padding-left: var(--space-3);
+}
+
+.highlight {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
 }

@@ -14,6 +14,7 @@ from services.compare import (
     CompareValidationError,
     response_from_row,
 )
+from services.identity import IdentityDep
 
 router = APIRouter(prefix="/api/compare", tags=["compare"])
 
@@ -48,9 +49,12 @@ async def create_comparison(
     payload: CompareRequest,
     session: SessionDep,
     compare_service: CompareDep,
+    identity: IdentityDep,
 ):
     try:
-        return await compare_service.compare(session, payload)
+        return await compare_service.compare(
+            session, payload, space_ids=identity.space_ids
+        )
     except CompareValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except CompareError as exc:

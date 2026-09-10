@@ -1,14 +1,9 @@
-from typing import Annotated
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from db import get_session
+import db
 from eval.store import list_runs, load_run
 
 router = APIRouter(prefix="/api/eval", tags=["eval"])
-
-SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 @router.get("/runs")
@@ -27,21 +22,24 @@ async def get_run(run_id: str):
 @router.post("/run")
 async def trigger_run(
     request: Request,
-    session: SessionDep,
-    suite: str = Query(default="ask"),
+    suite: str = Query(default="ask-regression"),
     use_llm: bool = Query(default=False),
 ):
-    if suite not in {"ask", "chat", "all"}:
-        raise HTTPException(status_code=400, detail="suite must be ask, chat, or all")
-    if suite in {"chat", "all"} and not use_llm:
+    from eval.fixtures import KeywordEmbeddingService
+    from eval.harness import KNOWN_SUITES, StubLLM, expand_suite_names, run_suites
+    from services.demo import require_eval_run
+
+    require_eval_run(request)
+
+    if suite not in KNOWN_SUITES:
         raise HTTPException(
             status_code=400,
-            detail="Chat eval requires use_llm=true",
+            detail=(
+                "suite must be a known eval suite "
+                "(ask/chat/acl/search/discipline regression or quality, or all)"
+            ),
         )
-    from eval.fixtures import KeywordEmbeddingService
-    from eval.harness import StubLLM, run_suites
-
-    names = ["ask", "chat"] if suite == "all" else [suite]
+    names = expand_suite_names(suite)
     ask = getattr(request.app.state, "ask", None)
     if use_llm:
         if ask is None:
@@ -53,12 +51,15 @@ async def trigger_run(
         embeddings = KeywordEmbeddingService()
         llm_client = StubLLM()
         llm_model = "stub"
-    result = await run_suites(
-        names,
-        use_llm=use_llm,
-        session=session,
-        embeddings=embeddings,
-        llm_client=llm_client,
-        llm_model=llm_model,
-    )
+    if db.SessionLocal is None:
+        raise HTTPException(status_code=503, detail="Database is not initialized")
+    async with db.SessionLocal() as session:
+        result = await run_suites(
+            names,
+            use_llm=use_llm,
+            session=session,
+            embeddings=embeddings,
+            llm_client=llm_client,
+            llm_model=llm_model,
+        )
     return result["manifest"]

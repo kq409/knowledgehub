@@ -159,3 +159,23 @@ def test_paper_parser_surfaces_http_errors(monkeypatch, tmp_path):
         raise AssertionError("expected GrobidError")
     except GrobidError as exc:
         assert "503" in str(exc)
+
+
+def test_paper_parser_uses_pypdf_when_grobid_disabled(tmp_path, monkeypatch):
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    monkeypatch.setattr("services.paper_parser.grobid_enabled", lambda: False)
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    buffer = BytesIO()
+    writer.write(buffer)
+    pdf = tmp_path / "blank.pdf"
+    pdf.write_bytes(buffer.getvalue())
+    parser = PaperParser()
+    assert parser._use_grobid is False
+    parser.warmup()
+    paper = parser.parse(pdf, fallback_title="Fallback Title")
+    assert paper.title == "Fallback Title"
+    assert isinstance(paper, ParsedPaper)

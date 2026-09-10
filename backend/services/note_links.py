@@ -113,12 +113,21 @@ async def linked_titles_for_notes(
 
 
 async def notes_linked_to_paper(
-    session: AsyncSession, paper_id: uuid.UUID
+    session: AsyncSession,
+    paper_id: uuid.UUID,
+    *,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[Note]:
+    from services.identity import bound_space_ids, space_clause
+
+    spaces = bound_space_ids(space_ids)
     result = await session.execute(
         select(Note)
         .join(NotePaper, NotePaper.note_id == Note.id)
-        .where(NotePaper.paper_id == paper_id)
+        .where(
+            NotePaper.paper_id == paper_id,
+            space_clause(Note.space_id, spaces),
+        )
         .order_by(Note.created_at.desc())
     )
     return list(result.scalars().all())

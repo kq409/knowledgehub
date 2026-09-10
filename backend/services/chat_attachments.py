@@ -80,9 +80,14 @@ async def file_chat_attachments(
     session: AsyncSession,
     files: list[UploadFile],
     prompt: str,
+    *,
+    space_id=None,
 ) -> list[FiledAttachment]:
     if not files:
         return []
+    from services.demo import require_uploads
+
+    require_uploads()
     llm_classify = _llm_classify(app)
     filed: list[FiledAttachment] = []
     for upload in files:
@@ -115,7 +120,9 @@ async def file_chat_attachments(
             except ValueError:
                 kind = "document"
             else:
-                paper = await create_pending_paper(session, content, filename)
+                paper = await create_pending_paper(
+                    session, content, filename, space_id=space_id
+                )
                 schedule_paper_processing(app, paper.id)
                 attachment = ChatFiledAttachment(
                     kind="paper",
@@ -137,7 +144,9 @@ async def file_chat_attachments(
             except ValueError:
                 kind = "document"
             else:
-                note = await create_pending_handwritten_note(session, content, filename)
+                note = await create_pending_handwritten_note(
+                    session, content, filename, space_id=space_id
+                )
                 schedule_note_processing(app, note.id)
                 attachment = ChatFiledAttachment(
                     kind="note",
@@ -152,7 +161,7 @@ async def file_chat_attachments(
                 )
                 continue
         document = await create_pending_document(
-            session, content, filename, mime_type=content_type
+            session, content, filename, mime_type=content_type, space_id=space_id
         )
         schedule_document_processing(app, document.id)
         attachment = ChatFiledAttachment(

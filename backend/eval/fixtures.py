@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
+    DEFAULT_SPACE_ID,
     Note,
     NoteChunk,
     NotePaper,
@@ -160,6 +161,7 @@ async def seed_library(
             processing_status=PaperStatus.ready.value,
             created_at=now,
             updated_at=now,
+            space_id=DEFAULT_SPACE_ID,
         )
         session.add(paper)
         await session.flush()
@@ -191,6 +193,7 @@ async def seed_library(
         processing_status=ProcessingStatus.ready.value,
         created_at=now,
         updated_at=now,
+        space_id=DEFAULT_SPACE_ID,
     )
     session.add(voice)
     await session.flush()
@@ -227,6 +230,7 @@ async def seed_library(
         processing_status=ProcessingStatus.ready.value,
         created_at=now,
         updated_at=now,
+        space_id=DEFAULT_SPACE_ID,
     )
     session.add(hand)
     await session.flush()

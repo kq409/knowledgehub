@@ -2,23 +2,28 @@ import asyncio
 import os
 import tempfile
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from db import close_db, init_db, run_migrations
+import db
 from routers.ask import router as ask_router
 from routers.chat import router as chat_router
 from routers.compare import router as compare_router
 from routers.conversations import router as conversations_router
+from routers.demo import router as demo_router
 from routers.documents import resume_pending_documents
 from routers.documents import router as documents_router
 from routers.eval import router as eval_router
+from routers.health import router as health_router
 from routers.library import router as library_router
 from routers.memories import router as memories_router
 from routers.notes import resume_pending_notes
@@ -30,6 +35,7 @@ from routers.papers import (
     schedule_pipeline_warmup,
 )
 from routers.papers import router as papers_router
+from routers.records import router as records_router
 from routers.voice_notes import router as voice_notes_router
 from services.agent.approvals import ApprovalBroker
 from services.agent.gate import EvidenceGate
@@ -45,10 +51,20 @@ from services.connect import (
     ConnectService,
     connect_min_similarity_from_env,
 )
+from services.demo import seed_demo_library
 from services.document_pipeline import DocumentPipeline
 from services.embeddings import EmbeddingService
 from services.extraction import ExtractionService
+from services.identity import IdentityDep
 from services.retrieval import min_similarity_from_env
+from services.settings import (
+    cors_origin_regex,
+    cors_origins,
+    demo_mode,
+    frontend_dist,
+    grobid_enabled,
+    whisper_enabled,
+)
 from transcription import TranscriptionService
 
 load_dotenv()
@@ -73,8 +89,8 @@ async def lifespan(app: FastAPI):
     if not database_url:
         raise RuntimeError("DATABASE_URL is not set")
     print("🗄️  Running database migrations...")
-    await asyncio.to_thread(run_migrations)
-    init_db(database_url)
+    await asyncio.to_thread(db.run_migrations)
+    db.init_db(database_url)
     print("✅ Database connected")
 
     llm_base_url = os.getenv("LLM_BASE_URL")
@@ -198,7 +214,18 @@ async def lifespan(app: FastAPI):
         llm_client=llm_client,
         load_whisper=False,
     )
+    if not whisper_enabled():
+        print("🔇 Whisper disabled (demo/prod)")
+    if not grobid_enabled():
+        print("📄 GROBID disabled; papers parse with pypdf")
     print("✅ Ready!")
+
+    if demo_mode() and db.SessionLocal is not None:
+        try:
+            async with db.SessionLocal() as session:
+                await seed_demo_library(session, app.state.embeddings)
+        except Exception as exc:
+            print(f"⚠️  Demo seed failed: {exc}", flush=True)
 
     async def resume_queued() -> None:
         try:
@@ -235,7 +262,7 @@ async def lifespan(app: FastAPI):
     mcp = getattr(app.state, "mcp", None)
     if mcp is not None:
         await mcp.close()
-    await close_db()
+    await db.close_db()
 
 
 app = FastAPI(
@@ -244,28 +271,26 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS for localhost development (Vite on 3000, docker-compose publishes 8080)
+# Same-origin in demo/prod (FastAPI serves frontend/dist). Localhost regex
+# stays for Vite. Set CORS_ORIGINS to a real origin if the UI is hosted apart.
+_cors_regex = cors_origin_regex()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origins=cors_origins(),
+    allow_origin_regex=_cors_regex,
     allow_credentials=True,
     allow_headers=["*"],
     allow_methods=["*"],
 )
 
+app.include_router(health_router)
+app.include_router(demo_router)
 app.include_router(voice_notes_router)
 app.include_router(notes_router)
 app.include_router(papers_router)
 app.include_router(documents_router)
 app.include_router(library_router)
+app.include_router(records_router)
 app.include_router(ask_router)
 app.include_router(chat_router)
 app.include_router(conversations_router)
@@ -274,14 +299,23 @@ app.include_router(memories_router)
 app.include_router(eval_router)
 
 
-@app.get("/api/status")
-async def get_status():
+@app.get("/api/identity")
+async def get_current_identity(
+    identity: IdentityDep,
+    session: Annotated[AsyncSession, Depends(db.get_session)],
+):
+    from services.library_records import list_visible_spaces
+
+    spaces = await list_visible_spaces(session, identity)
     return {
-        "status": "ready" if service else "initializing",
-        "whisper_model": os.getenv("WHISPER_MODEL"),
-        "llm_model": os.getenv("LLM_MODEL"),
-        "llm_base_url": os.getenv("LLM_BASE_URL"),
-        "embedding_model": os.getenv("EMBEDDING_MODEL"),
+        "user_id": identity.user_id,
+        "space_ids": [str(item) for item in sorted(identity.space_ids, key=str)],
+        "primary_space_id": str(identity.primary_space_id),
+        "spaces": [
+            {"id": str(row.id), "slug": row.slug, "name": row.name} for row in spaces
+        ],
+        "stub": True,
+        "notice": "Demo ACL via X-User-Id header, not SSO.",
     }
 
 
@@ -295,6 +329,11 @@ async def get_system_prompt():
 
 @app.post("/api/transcribe")
 async def transcribe_audio(audio: Annotated[UploadFile, File()]):
+    if not whisper_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail="Voice transcription is disabled on this deployment.",
+        )
     if not service:
         raise HTTPException(
             status_code=503, detail="Service not ready, still initializing models"
@@ -354,3 +393,27 @@ async def clean_text(request: CleanRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _mount_frontend(application: FastAPI) -> None:
+    configured = frontend_dist()
+    dist = Path(
+        configured or Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    )
+    if not dist.is_dir():
+        return
+    assets = dist / "assets"
+    if assets.is_dir():
+        application.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+    @application.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        candidate = dist / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(dist / "index.html")
+
+
+_mount_frontend(app)

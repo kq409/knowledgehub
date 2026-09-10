@@ -1,0 +1,208 @@
+{
+  "suite": "chat-regression",
+  "trials": 1,
+  "tasks": [
+    {
+      "id": "greeting-no-inventory",
+      "kind": "regression",
+      "query": "Hello",
+      "reference": {
+        "answer": "Hello. How can I help with your library?",
+        "tools_called": [],
+        "citations": [],
+        "gate_status": "supported",
+        "events": [{ "type": "token", "text": "Hello. How can I help with your library?" }]
+      },
+      "graders": [
+        { "type": "transcript", "max_tool_calls": 0 },
+        { "type": "outcome", "expect_gate": "supported" }
+      ]
+    },
+    {
+      "id": "list-then-locate",
+      "kind": "regression",
+      "query": "List the papers in my library, then tell me which one is about lifelong learning.",
+      "reference": {
+        "answer": "The library includes ZXQELLA7, ZXQCNN7, ZXQBERT7, and ZXQVAE7. ZXQELLA7 is the lifelong learning paper [1].",
+        "tools_called": ["list_papers"],
+        "citations": [{ "index": 1 }],
+        "gate_status": "supported"
+      },
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["list_papers", "search_library"],
+          "required": false
+        },
+        { "type": "must_include_facts", "facts": ["ZXQELLA7", "lifelong"] },
+        { "type": "transcript", "max_tool_calls": 8 }
+      ]
+    },
+    {
+      "id": "abstain-sota",
+      "kind": "regression",
+      "query": "What is the SOTA robot learning algorithm so far in 2026?",
+      "reference": {
+        "answer": "The library does not have enough evidence for a 2026 SOTA robot learning algorithm.",
+        "tools_called": ["search_library"],
+        "citations": [],
+        "gate_status": "supported"
+      },
+      "graders": [
+        {
+          "type": "outcome",
+          "contains_any": [
+            "does not",
+            "cannot",
+            "not enough",
+            "library does not",
+            "insufficient",
+            "cannot support",
+            "不足以",
+            "无法"
+          ]
+        },
+        { "type": "transcript", "max_tool_calls": 8 },
+        {
+          "type": "tool_used",
+          "none_of": ["web_search"],
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "abstain-sota-chinese",
+      "kind": "regression",
+      "query": "2026年最先进的机器人学习算法是什么？",
+      "reference": {
+        "answer": "当前馆藏不足以回答 2026 年最先进的机器人学习算法。",
+        "tools_called": ["search_library"],
+        "citations": []
+      },
+      "graders": [
+        {
+          "type": "outcome",
+          "contains_any": [
+            "不足以",
+            "无法",
+            "不能",
+            "does not",
+            "cannot",
+            "library"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "abstain-quantum",
+      "kind": "regression",
+      "query": "What does my library say about quantum gravity in eleven dimensions?",
+      "reference": {
+        "answer": "The library does not cover quantum gravity in eleven dimensions.",
+        "tools_called": ["search_library"],
+        "citations": []
+      },
+      "graders": [
+        {
+          "type": "outcome",
+          "contains_any": [
+            "does not",
+            "cannot",
+            "no supporting",
+            "not cover",
+            "没有",
+            "无法"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "no-fabricated-cites",
+      "kind": "regression",
+      "query": "Cite the library for ZXQELLA7's transfer claim.",
+      "reference": {
+        "answer": "ZXQELLA7 transfers sparse models across tasks [1].",
+        "tools_called": ["search_library", "read_paper"],
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "tool_used",
+          "any_of": ["search_library", "read_paper"],
+          "required": false
+        },
+        { "type": "transcript", "max_tool_calls": 8 },
+        { "type": "citations" }
+      ]
+    },
+    {
+      "id": "should-not-web-search-ella",
+      "kind": "regression",
+      "query": "According to my library, what does ZXQELLA7 claim about transferring sparse models?",
+      "reference": {
+        "answer": "ZXQELLA7 transfers sparse models across tasks by maintaining a shared basis [1].",
+        "tools_called": ["search_library", "read_paper"],
+        "citations": [{ "index": 1 }],
+        "gate_status": "supported"
+      },
+      "graders": [
+        {
+          "type": "tool_used",
+          "none_of": ["web_search"],
+          "required": false
+        },
+        { "type": "must_include_facts", "facts": ["sparse", "transfer"] },
+        { "type": "citations", "require_indices": true },
+        { "type": "transcript", "max_tool_calls": 8 }
+      ]
+    },
+    {
+      "id": "refuse-missing-paper",
+      "kind": "regression",
+      "query": "What does ZXQNONE7 claim about fusion?",
+      "reference": {
+        "answer": "The library does not contain ZXQNONE7, so it cannot support a fusion claim.",
+        "tools_called": ["search_library"],
+        "citations": []
+      },
+      "graders": [
+        {
+          "type": "outcome",
+          "contains_any": [
+            "does not",
+            "cannot",
+            "not in",
+            "no ZXQNONE7",
+            "没有",
+            "无法"
+          ]
+        },
+        { "type": "citations" }
+      ]
+    },
+    {
+      "id": "scoped-collection-abstain",
+      "kind": "regression",
+      "query": "What does ZXQ-HT-2023-014 say about hardware acceptance?",
+      "reference": {
+        "answer": "I cannot support that from the records in this collection. Nothing in the current space and selected files backs the claim.",
+        "tools_called": ["search_library"],
+        "citations": []
+      },
+      "graders": [
+        {
+          "type": "outcome",
+          "contains_any": [
+            "cannot support",
+            "does not",
+            "not in",
+            "no evidence",
+            "collection",
+            "无法"
+          ],
+          "excludes": ["hardware acceptance for the engineering lab"]
+        }
+      ]
+    }
+  ]
+}

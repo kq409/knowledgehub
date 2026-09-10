@@ -47,6 +47,12 @@ class NoteStatus(str, Enum):
     failed = "failed"
 
 
+class AccessionStatus(str, Enum):
+    received = "received"
+    accessioned = "accessioned"
+    rejected = "rejected"
+
+
 def _validate_note_paper_ids(value: list[uuid.UUID]) -> list[uuid.UUID]:
     unique = dedupe_paper_ids(value)
     if len(unique) > MAX_PAPERS_PER_NOTE:
@@ -126,6 +132,9 @@ class NoteResponse(ExtractedNote):
     processing_status: NoteStatus
     processing_error: str | None = None
     chunk_count: int = 0
+    revision: int = 1
+    sha256: str | None = None
+    accession_status: AccessionStatus = AccessionStatus.accessioned
     created_at: datetime
     updated_at: datetime
 
@@ -246,6 +255,9 @@ class PaperResponse(BaseModel):
     processing_status: PaperStatus
     processing_error: str | None = None
     chunk_count: int = 0
+    revision: int = 1
+    sha256: str | None = None
+    accession_status: AccessionStatus = AccessionStatus.accessioned
     created_at: datetime
     updated_at: datetime
 
@@ -257,6 +269,43 @@ class LibraryUploadResponse(BaseModel):
     paper: PaperResponse | None = None
     note: NoteResponse | None = None
     document: "LibraryDocumentResponse | None" = None
+    suggested_kind: Literal["paper", "note", "document"] | None = None
+
+
+class SpaceResponse(BaseModel):
+    id: uuid.UUID
+    slug: str
+    name: str
+
+
+class LibraryRecordResponse(BaseModel):
+    id: uuid.UUID
+    space_id: uuid.UUID
+    content_type: Literal["scholarly_article", "research_note", "document"]
+    title: str
+    status: str
+    updated_at: datetime
+    snippet: str | None = None
+    highlight: str | None = None
+    revision: int = 1
+    checksum: str | None = None
+    accession_status: str = "accessioned"
+
+
+class RecordPageResponse(BaseModel):
+    items: list[LibraryRecordResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class CatalogSearchRequest(BaseModel):
+    query: str = ""
+    space_id: uuid.UUID | None = None
+    content_type: str | None = None
+    record_ids: list[uuid.UUID] | None = None
+    limit: int | None = Field(default=None, ge=1, le=100)
+    offset: int | None = Field(default=None, ge=0)
 
 
 class LibraryDocumentUpdate(BaseModel):
@@ -272,6 +321,9 @@ class LibraryDocumentResponse(BaseModel):
     processing_status: PaperStatus
     processing_error: str | None = None
     chunk_count: int = 0
+    revision: int = 1
+    sha256: str | None = None
+    accession_status: AccessionStatus = AccessionStatus.accessioned
     created_at: datetime
     updated_at: datetime
 
@@ -413,6 +465,11 @@ class ChatRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=16)
     conversation_id: uuid.UUID | None = None
     attachments: list[ChatFiledAttachment] = Field(default_factory=list)
+    user_id: str | None = None
+    space_ids: list[uuid.UUID] | None = None
+    space_id: uuid.UUID | None = None
+    record_ids: list[uuid.UUID] | None = None
+    library_mode: bool | None = None
 
     @field_validator("messages")
     @classmethod
@@ -429,6 +486,14 @@ class ChatRequest(BaseModel):
         if last.content.strip() or self.attachments:
             return self
         raise ValueError("Question cannot be empty")
+
+    def is_library_mode(self) -> bool:
+        """Collection-scoped turns fail closed; personal chat stays fail-open."""
+        if self.library_mode is True:
+            return True
+        if self.library_mode is False:
+            return False
+        return self.space_id is not None or bool(self.record_ids)
 
 
 class ChatEventType(str, Enum):

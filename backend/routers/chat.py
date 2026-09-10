@@ -18,6 +18,7 @@ from services.chat_attachments import (
     default_attachment_question,
     file_chat_attachments,
 )
+from services.identity import Identity, IdentityDep
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -69,6 +70,55 @@ def _parse_bool(value: str | bool | None, default: bool) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _parse_uuid(value: object, *, field: str) -> UUID | None:
+    if value is None:
+        return None
+    if isinstance(value, UUID):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return UUID(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field} must be a UUID") from exc
+
+
+def _parse_uuid_list(value: object, *, field: str) -> list[UUID] | None:
+    if value is None:
+        return None
+    raw = value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"{field} must be a JSON list of UUIDs"
+            ) from exc
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail=f"{field} must be a list of UUIDs")
+    parsed: list[UUID] = []
+    for item in raw:
+        uid = _parse_uuid(item, field=field)
+        if uid is not None:
+            parsed.append(uid)
+    return parsed
+
+
+def _bind_collection_scope(payload: ChatRequest, identity: Identity) -> ChatRequest:
+    if payload.space_id is not None and payload.space_id not in identity.space_ids:
+        raise HTTPException(status_code=404, detail="Space not found")
+    if payload.space_id is not None:
+        payload.space_ids = [payload.space_id]
+    else:
+        payload.space_ids = list(identity.space_ids)
+    payload.user_id = identity.user_id
+    return payload
+
+
 def _require_source(payload: ChatRequest) -> None:
     if (
         not payload.include_papers
@@ -88,6 +138,7 @@ def _require_source(payload: ChatRequest) -> None:
 async def _payload_from_request(
     request: Request,
     session: SessionDep,
+    identity: IdentityDep,
 ) -> ChatRequest:
     content_type = (request.headers.get("content-type") or "").lower()
     if "multipart/form-data" in content_type:
@@ -111,11 +162,28 @@ async def _payload_from_request(
                 raise HTTPException(
                     status_code=400, detail="conversation_id must be a UUID"
                 ) from exc
+        space_id = _parse_uuid(form.get("space_id"), field="space_id")
+        record_ids = _parse_uuid_list(form.get("record_ids"), field="record_ids")
+        library_raw = form.get("library_mode")
+        library_mode = None
+        if isinstance(library_raw, str) and library_raw.strip():
+            library_mode = _parse_bool(library_raw, True)
         messages = [ChatMessage.model_validate(item) for item in parsed]
         if not messages:
             raise HTTPException(status_code=400, detail="Send at least one message")
         prompt = messages[-1].content if messages else ""
-        filed = await file_chat_attachments(request.app, session, files, prompt)
+        write_space = (
+            space_id
+            if space_id is not None and space_id in identity.space_ids
+            else identity.primary_space_id
+        )
+        filed = await file_chat_attachments(
+            request.app,
+            session,
+            files,
+            prompt,
+            space_id=write_space,
+        )
         if not messages[-1].content.strip():
             names = [upload.filename or "attachment" for upload in files]
             messages[-1] = ChatMessage(
@@ -123,7 +191,7 @@ async def _payload_from_request(
                 content=default_attachment_question(names),
             )
         try:
-            return ChatRequest(
+            payload = ChatRequest(
                 messages=messages,
                 include_papers=_parse_bool(form.get("include_papers"), True),
                 include_voice_notes=_parse_bool(form.get("include_voice_notes"), True),
@@ -133,15 +201,21 @@ async def _payload_from_request(
                 include_documents=_parse_bool(form.get("include_documents"), True),
                 conversation_id=conversation_id,
                 attachments=[item.attachment for item in filed],
+                user_id=identity.user_id,
+                space_id=space_id,
+                record_ids=record_ids,
+                library_mode=library_mode,
             )
         except ValidationError as exc:
             raise RequestValidationError(exc.errors(include_context=False)) from exc
+        return _bind_collection_scope(payload, identity)
 
     body = await request.json()
     try:
-        return ChatRequest.model_validate(body)
+        payload = ChatRequest.model_validate(body)
     except ValidationError as exc:
         raise RequestValidationError(exc.errors(include_context=False)) from exc
+    return _bind_collection_scope(payload, identity)
 
 
 @router.post("/approve")
@@ -167,9 +241,13 @@ async def chat(
     request: Request,
     session: SessionDep,
     agent: AgentDep,
+    identity: IdentityDep,
 ):
-    payload = await _payload_from_request(request, session)
+    payload = await _payload_from_request(request, session, identity)
     _require_source(payload)
+    from services.rate_limit import require_chat_capacity
+
+    require_chat_capacity(request)
 
     question = payload.messages[-1].content
     conversation = await ensure_conversation(

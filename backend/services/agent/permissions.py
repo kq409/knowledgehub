@@ -41,6 +41,8 @@ APPROVAL_REASON = "needs the researcher's approval before it can change the libr
 # no approver is wired up.
 APPROVAL_UNSUPPORTED_REASON = APPROVAL_REASON
 
+# Cataloging writes (link/unlink, memory) pause for review via ApprovalBroker.
+# That is the Phase 3 pending-review queue — not a second accession table.
 WRITE_TOOLS = frozenset(
     {
         "memory_write",

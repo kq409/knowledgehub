@@ -184,6 +184,34 @@ async def test_an_unsupported_answer_reaches_the_client(seeded_paper: Paper):
     assert "[99]" in verdicts[1]["reason"]
 
 
+async def test_library_mode_does_not_ship_unsupported_answer(seeded_paper: Paper):
+    from services.agent.loop import LIBRARY_ABSTAIN
+
+    app = build_app(
+        scripted_llm(
+            '{"tools": [{"name": "list_papers", "input": {}}]}',
+            "Hybrid retrieval is settled science [99].",
+            "Hybrid retrieval is settled science [99].",
+        )
+    )
+
+    response = await post(
+        app,
+        {
+            "messages": [{"role": "user", "content": "Is hybrid retrieval settled?"}],
+            "library_mode": True,
+            "record_ids": [str(seeded_paper.id)],
+        },
+    )
+
+    events = parse_sse(response.text)
+    tokens = [event for event in events if event["type"] == "token"]
+    assert tokens
+    assert tokens[0]["text"] == LIBRARY_ABSTAIN
+    verdicts = [event for event in events if event["type"] == "verdict"]
+    assert verdicts[-1]["status"] == "unsupported"
+
+
 async def test_a_comparison_artifact_survives_the_sse_stream(seeded_paper: Paper):
     other_id = uuid.uuid4()
     response = CompareResponse(

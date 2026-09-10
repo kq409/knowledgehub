@@ -88,6 +88,7 @@ from services.compare import CompareService
 from services.connect import ConnectService
 from services.embeddings import EmbeddingService
 from services.extraction import ExtractionService
+from services.identity import DEFAULT_USER_ID
 from services.web_search import WebSearcher
 
 __all__ = [
@@ -158,6 +159,10 @@ FINAL_TURN_NUDGE = (
     "evidence you already retrieved, and say plainly what you could not check."
 )
 EMPTY_ANSWER = "The model returned an empty answer."
+LIBRARY_ABSTAIN = (
+    "I cannot support that from the records in this collection. "
+    "Nothing in the current space and selected files backs the claim."
+)
 EMPTY_PLAN_SUFFIX = (
     "No tools were selected for this message. Answer directly without calling "
     "tools. Do not invent papers, notes, or documents in the library. "
@@ -172,6 +177,22 @@ FIELD_WIDE_SUFFIX = (
     "If web search is not configured, say so and list the closest library papers. "
     "Web [n] citations are not library papers."
 )
+
+
+def _library_scope_suffix(payload: ChatRequest) -> str:
+    if not payload.is_library_mode():
+        return ""
+    lines = [
+        "This turn is scoped to the current library collection.",
+        "Do not answer from outside this scope. If tools return no in-scope "
+        "evidence, abstain rather than using other spaces or general knowledge.",
+    ]
+    if payload.space_id is not None:
+        lines.append(f"Active space_id: {payload.space_id}.")
+    if payload.record_ids:
+        ids = ", ".join(str(item) for item in payload.record_ids)
+        lines.append(f"Only these record ids may be used: {ids}.")
+    return "\n".join(lines)
 
 
 def _truncate(content: str, call: ToolCall, store: ToolResultStore | None) -> str:
@@ -361,6 +382,15 @@ class ResearchAgent:
             handlers=state.pool.handlers if state.pool is not None else None,
             depth=0,
             subagent_budget=1,
+            user_id=payload.user_id or DEFAULT_USER_ID,
+            space_ids=(
+                frozenset(payload.space_ids) if payload.space_ids is not None else None
+            ),
+            record_ids=(
+                frozenset(payload.record_ids)
+                if payload.record_ids is not None
+                else None
+            ),
         )
 
     async def _complete(
@@ -841,6 +871,9 @@ class ResearchAgent:
             sections.append(recalled)
         if classify_query(question) is QueryKind.field_wide:
             sections.append(FIELD_WIDE_SUFFIX)
+        scope = _library_scope_suffix(payload)
+        if scope:
+            sections.append(scope)
         armed_prompt = "\n\n".join(sections)
         started = time.perf_counter()
 
@@ -985,8 +1018,17 @@ class ResearchAgent:
             )
 
         citations: list[ChatCitation] = state.registry.citations()
-        if answer:
+        if (
+            payload.is_library_mode()
+            and verdict is not None
+            and not verdict.ok
+            and not verdict.impossible
+        ):
+            answer = LIBRARY_ABSTAIN
+            citations = []
+        elif answer:
             answer, citations = compact_answer_citations(answer, citations)
+        if answer:
             yield AgentEvent(type=ChatEventType.token, data={"text": answer})
         else:
             yield AgentEvent(type=ChatEventType.error, data={"message": EMPTY_ANSWER})

@@ -50,6 +50,32 @@ def retrieval_titles(
     )
 
 
+def retrieval_ids(
+    retrieved_ids: list[str],
+    *,
+    must_include: list[str] | None = None,
+    must_exclude: list[str] | None = None,
+) -> Grade:
+    """Set-difference oracle over retrieved source ids (not titles)."""
+    got = {item.lower() for item in retrieved_ids}
+    missing = [item for item in (must_include or []) if item.lower() not in got]
+    leaked = [item for item in (must_exclude or []) if item.lower() in got]
+    passed = not missing and not leaked
+    bits: list[str] = []
+    if missing:
+        bits.append("missing " + ", ".join(missing))
+    if leaked:
+        bits.append("leaked " + ", ".join(leaked))
+    if not bits:
+        bits.append("retrieved ids acceptable")
+    return Grade(
+        name="retrieval_ids",
+        passed=passed,
+        score=_as_float(passed),
+        detail="; ".join(bits),
+    )
+
+
 def abstain(
     *,
     insufficient_evidence: bool,
@@ -126,20 +152,65 @@ def citations(
     )
 
 
-def tool_used(tools_called: list[str], any_of: list[str]) -> Grade:
+def tool_used(
+    tools_called: list[str],
+    any_of: list[str] | None = None,
+    *,
+    none_of: list[str] | None = None,
+    required: bool = False,
+) -> Grade:
+    """Path diagnostic. Default not required — grade the outcome, not the route."""
     used = set(tools_called)
-    wanted = set(any_of)
+    wanted = set(any_of or [])
+    banned = set(none_of or [])
     hit = sorted(used & wanted)
-    passed = bool(hit)
+    leaked = sorted(used & banned)
+    if banned and leaked:
+        return Grade(
+            name="tool_used",
+            passed=False,
+            score=0.0,
+            detail="used banned " + ", ".join(leaked),
+            required=required,
+        )
+    if wanted:
+        passed = bool(hit)
+        detail = (
+            "used " + ", ".join(hit)
+            if passed
+            else "did not use any of " + ", ".join(sorted(wanted))
+        )
+    elif banned:
+        passed = True
+        detail = "did not use " + ", ".join(sorted(banned))
+    else:
+        passed = True
+        detail = "no tool constraint"
     return Grade(
         name="tool_used",
         passed=passed,
         score=_as_float(passed),
-        detail=(
-            "used " + ", ".join(hit)
-            if passed
-            else "did not use any of " + ", ".join(any_of)
-        ),
+        detail=detail,
+        required=required,
+    )
+
+
+def must_include_facts(
+    answer: str,
+    facts: list[str],
+    *,
+    required: bool = True,
+) -> Grade:
+    """Coverage: every atomic fact must appear in the answer (case-insensitive)."""
+    text = (answer or "").lower()
+    missing = [fact for fact in facts if fact.lower() not in text]
+    passed = not missing
+    return Grade(
+        name="must_include_facts",
+        passed=passed,
+        score=_as_float(passed),
+        detail=("all facts present" if passed else "missing " + ", ".join(missing)),
+        required=required,
     )
 
 
@@ -173,20 +244,25 @@ def outcome(
     *,
     contains: list[str] | None = None,
     contains_any: list[str] | None = None,
+    excludes: list[str] | None = None,
     gate_status: str | None = None,
     expect_gate: str | None = None,
+    required: bool = True,
 ) -> Grade:
-    text = answer.lower()
+    text = (answer or "").lower()
     missing = [needle for needle in (contains or []) if needle.lower() not in text]
     any_needles = contains_any or []
     any_hit = not any_needles or any(needle.lower() in text for needle in any_needles)
+    leaked = [needle for needle in (excludes or []) if needle.lower() in text]
     gate_ok = expect_gate is None or (gate_status or "") == expect_gate
-    passed = not missing and any_hit and gate_ok
+    passed = not missing and any_hit and not leaked and gate_ok
     bits: list[str] = []
     if missing:
         bits.append("missing " + ", ".join(missing))
     if any_needles and not any_hit:
         bits.append("none of " + ", ".join(any_needles))
+    if leaked:
+        bits.append("leaked " + ", ".join(leaked))
     if not gate_ok:
         bits.append(f"gate {gate_status!r} != {expect_gate!r}")
     if not bits:
@@ -196,6 +272,7 @@ def outcome(
         passed=passed,
         score=_as_float(passed),
         detail="; ".join(bits),
+        required=required,
     )
 
 

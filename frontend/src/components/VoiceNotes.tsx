@@ -9,6 +9,7 @@ import { ErrorMessage } from './ErrorMessage';
 import { VoiceNoteCard } from './VoiceNoteCard';
 import { VoiceNoteList } from './VoiceNoteList';
 import type { ReviewStatus, VoiceNote, VoiceNoteDraft } from '../types';
+import { useAppStatus } from '../hooks/appStatus';
 
 interface TranscriptionResponse {
   success: boolean;
@@ -27,6 +28,8 @@ const NOTE_EXTRACT_ERROR =
   'Could not extract a structured research note. Your transcription is unaffected.';
 
 export function VoiceNotes() {
+  const { whisper_enabled: whisperEnabled, uploads_enabled: uploadsEnabled } =
+    useAppStatus();
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [rawText, setRawText] = useState<string | null>(null);
@@ -448,6 +451,9 @@ export function VoiceNotes() {
   );
 
   useEffect(() => {
+    if (!whisperEnabled) {
+      return;
+    }
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isProcessing || e.repeat || isKeyDownRef.current) return;
 
@@ -482,26 +488,40 @@ export function VoiceNotes() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [isRecording, isProcessing, startRecording, stopRecording]);
+  }, [
+    whisperEnabled,
+    isRecording,
+    isProcessing,
+    startRecording,
+    stopRecording,
+  ]);
 
   return (
     <div className={styles.voiceNotes}>
-      <RecordButton
-        isRecording={isRecording}
-        isProcessing={isProcessing}
-        onStartRecording={startRecording}
-        onStopRecording={stopRecording}
-      />
+      {whisperEnabled ? (
+        <RecordButton
+          isRecording={isRecording}
+          isProcessing={isProcessing}
+          onStartRecording={startRecording}
+          onStopRecording={stopRecording}
+        />
+      ) : (
+        <p className={styles.hint}>
+          Microphone recording is disabled on this deployment.
+        </p>
+      )}
 
-      <UploadZone
-        isProcessing={isProcessing}
-        isDragging={isDragging}
-        onFileSelect={handleFileSelect}
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        fileInputRef={fileInputRef}
-      />
+      {whisperEnabled && uploadsEnabled ? (
+        <UploadZone
+          isProcessing={isProcessing}
+          isDragging={isDragging}
+          onFileSelect={handleFileSelect}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          fileInputRef={fileInputRef}
+        />
+      ) : null}
 
       <TextInputZone
         isProcessing={isProcessing}

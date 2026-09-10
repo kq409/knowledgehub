@@ -1,0 +1,224 @@
+{
+  "suite": "ask-quality",
+  "trials": 1,
+  "tasks": [
+    {
+      "id": "semantic-transfer",
+      "kind": "capability",
+      "query": "ZXQELLA7 transfers sparse models across tasks",
+      "reference": {
+        "retrieved_titles": [
+          "ZXQELLA7: Efficient Lifelong Learning Algorithm"
+        ],
+        "insufficient_evidence": false,
+        "answer": "ZXQELLA7 transfers sparse models across tasks [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"],
+          "k": 8
+        },
+        { "type": "abstain", "expect": "none" }
+      ]
+    },
+    {
+      "id": "semantic-images",
+      "kind": "capability",
+      "query": "ZXQCNN7 classify photographs",
+      "reference": {
+        "retrieved_titles": ["ZXQCNN7 convolutional networks"],
+        "answer": "ZXQCNN7 convolutional networks classify photographs [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQCNN7 convolutional networks"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "semantic-bert-attention",
+      "kind": "capability",
+      "query": "ZXQBERT7 bidirectional attention",
+      "reference": {
+        "retrieved_titles": ["ZXQBERT7 attention for language"],
+        "answer": "ZXQBERT7 uses bidirectional self-attention [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQBERT7 attention for language"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "semantic-vae-latent",
+      "kind": "capability",
+      "query": "ZXQVAE7 compressed latent space",
+      "reference": {
+        "retrieved_titles": ["ZXQVAE7 latent variable models"],
+        "answer": "ZXQVAE7 learns a compressed latent space [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQVAE7 latent variable models"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "library-claim",
+      "kind": "capability",
+      "query": "What does ZXQELLA7 claim about transfer?",
+      "reference": {
+        "retrieved_titles": [
+          "ZXQELLA7: Efficient Lifelong Learning Algorithm"
+        ],
+        "insufficient_evidence": false,
+        "answer": "ZXQELLA7 transfers sparse models across tasks without catastrophic forgetting [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"],
+          "k": 8
+        },
+        { "type": "abstain", "expect": "none" },
+        { "type": "citations", "require_indices": true },
+        {
+          "type": "must_include_facts",
+          "facts": ["sparse", "transfer"]
+        },
+        { "type": "faithfulness" }
+      ]
+    },
+    {
+      "id": "library-claim-cnn",
+      "kind": "capability",
+      "query": "What does ZXQCNN7 say about photographs?",
+      "reference": {
+        "retrieved_titles": ["ZXQCNN7 convolutional networks"],
+        "insufficient_evidence": false,
+        "answer": "ZXQCNN7 convolutional networks classify photographs of objects [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQCNN7 convolutional networks"],
+          "k": 8
+        },
+        { "type": "abstain", "expect": "none" },
+        { "type": "must_include_facts", "facts": ["photograph"] }
+      ]
+    },
+    {
+      "id": "library-claim-note",
+      "kind": "capability",
+      "query": "What is my hypothesis about ZXQELLA7 transfer?",
+      "reference": {
+        "retrieved_titles": [
+          "Voice note on ZXQELLA7 transfer",
+          "ZXQELLA7: Efficient Lifelong Learning Algorithm"
+        ],
+        "answer": "The voice note hypothesizes that ZXQELLA7 transfer will work on robot tasks [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": [
+            "Voice note on ZXQELLA7 transfer",
+            "ZXQELLA7: Efficient Lifelong Learning Algorithm"
+          ],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "handwritten-cnn",
+      "kind": "capability",
+      "query": "What did I write about ZXQCNN7 photographs?",
+      "reference": {
+        "retrieved_titles": ["Handwritten notes on ZXQCNN7"],
+        "answer": "The handwritten notes say ZXQCNN7 convolutional networks classify photographs [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["Handwritten notes on ZXQCNN7"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "library-bert-claim",
+      "kind": "capability",
+      "query": "What does ZXQBERT7 claim about self-attention?",
+      "reference": {
+        "retrieved_titles": ["ZXQBERT7 attention for language"],
+        "insufficient_evidence": false,
+        "answer": "ZXQBERT7 replaces recurrence with self-attention for token mixing [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQBERT7 attention for language"],
+          "k": 8
+        },
+        { "type": "abstain", "expect": "none" },
+        { "type": "must_include_facts", "facts": ["self-attention"] }
+      ]
+    },
+    {
+      "id": "library-vae-claim",
+      "kind": "capability",
+      "query": "What does ZXQVAE7 claim about the encoder?",
+      "reference": {
+        "retrieved_titles": ["ZXQVAE7 latent variable models"],
+        "insufficient_evidence": false,
+        "answer": "The ZXQVAE7 encoder maps inputs to a Gaussian posterior over latents [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQVAE7 latent variable models"],
+          "k": 8
+        },
+        { "type": "abstain", "expect": "none" },
+        { "type": "must_include_facts", "facts": ["encoder", "Gaussian"] }
+      ]
+    },
+    {
+      "id": "note-hypothesis-not-invented-metric",
+      "kind": "capability",
+      "query": "What hypothesis did I record about ZXQELLA7 transfer, and did I give a numeric accuracy?",
+      "reference": {
+        "retrieved_titles": ["Voice note on ZXQELLA7 transfer"],
+        "insufficient_evidence": false,
+        "answer": "The note hypothesizes ZXQELLA7 transfer will work on robot tasks. It does not give a numeric accuracy [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["Voice note on ZXQELLA7 transfer"],
+          "k": 8
+        },
+        { "type": "must_include_facts", "facts": ["robot"] }
+      ]
+    }
+  ]
+}

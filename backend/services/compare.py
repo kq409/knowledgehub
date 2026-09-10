@@ -23,6 +23,7 @@ from schemas import (
 )
 from services.agent.telemetry import log_warning
 from services.embeddings import EmbeddingService
+from services.identity import bound_space_ids, space_clause
 from services.llm_chat import max_tokens_from_env as max_tokens_from_env
 from services.retrieval import (
     LinkedNote,
@@ -321,9 +322,19 @@ class CompareService:
             raise CompareError(f"Invalid synthesis payload: {exc}") from exc
 
     async def _load_papers(
-        self, session: AsyncSession, paper_ids: list[uuid.UUID]
+        self,
+        session: AsyncSession,
+        paper_ids: list[uuid.UUID],
+        *,
+        space_ids: frozenset[uuid.UUID] | None = None,
     ) -> list[Paper]:
-        result = await session.execute(select(Paper).where(Paper.id.in_(paper_ids)))
+        spaces = bound_space_ids(space_ids)
+        result = await session.execute(
+            select(Paper).where(
+                Paper.id.in_(paper_ids),
+                space_clause(Paper.space_id, spaces),
+            )
+        )
         found = {paper.id: paper for paper in result.scalars().all()}
         papers: list[Paper] = []
         missing: list[str] = []
@@ -377,6 +388,7 @@ class CompareService:
         *,
         run_id: str | None = None,
         on_progress: ProgressSink | None = None,
+        space_ids: frozenset[uuid.UUID] | None = None,
     ) -> CompareResponse:
         """Build a comparison. Pass the same `run_id` again to resume one.
 
@@ -391,10 +403,10 @@ class CompareService:
         except ValueError as exc:
             raise CompareValidationError(str(exc)) from exc
 
-        papers = await self._load_papers(session, paper_ids)
+        papers = await self._load_papers(session, paper_ids, space_ids=space_ids)
         query = dimension_query(dimensions)
         query_embedding = await asyncio.to_thread(self.embeddings.embed_query, query)
-        linked = await list_linked_notes(session, paper_ids)
+        linked = await list_linked_notes(session, paper_ids, space_ids=space_ids)
         notes_by_paper: dict[uuid.UUID, list[LinkedNote]] = {}
         for note in linked:
             notes_by_paper.setdefault(note.paper_id, []).append(note)
@@ -411,7 +423,11 @@ class CompareService:
         hits_by_paper: dict[uuid.UUID, list[RetrievalHit]] = {}
         for position, paper in enumerate(papers, start=1):
             hits_by_paper[paper.id] = await search_for_paper(
-                session, query_embedding, paper.id, query_text=query
+                session,
+                query_embedding,
+                paper.id,
+                query_text=query,
+                space_ids=space_ids,
             )
             workflow.report(paper.title, position, len(papers), cached=False)
 

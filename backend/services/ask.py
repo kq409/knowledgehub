@@ -223,14 +223,23 @@ class AskService:
             )
         return citations
 
-    async def ask(self, session: AsyncSession, payload: AskRequest) -> AskResponse:
+    async def ask(
+        self,
+        session: AsyncSession,
+        payload: AskRequest,
+        *,
+        space_ids: frozenset[uuid.UUID] | None = None,
+    ) -> AskResponse:
         started = time.perf_counter()
         request_id = str(uuid.uuid4())
         top_k = clamp_top_k(payload.top_k)
+        spaces = space_ids
         query_embedding = await asyncio.to_thread(
             self.embeddings.embed_query, payload.question
         )
-        papers = await list_ready_papers(session, paper_ids=payload.paper_ids)
+        papers = await list_ready_papers(
+            session, paper_ids=payload.paper_ids, space_ids=spaces
+        )
         hits = await search(
             session,
             query_embedding,
@@ -240,6 +249,7 @@ class AskService:
             include_handwritten_notes=payload.include_handwritten_notes,
             top_k=top_k,
             paper_ids=payload.paper_ids,
+            space_ids=spaces,
         )
         decision = decide_ask(
             payload.question,

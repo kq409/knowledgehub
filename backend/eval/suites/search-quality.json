@@ -1,0 +1,141 @@
+{
+  "suite": "search-quality",
+  "trials": 1,
+  "tasks": [
+    {
+      "id": "semantic-forgetting-shared-basis",
+      "kind": "capability",
+      "user": "alice",
+      "search": "rag",
+      "query": "catastrophic forgetting shared basis across tasks",
+      "reference": {
+        "retrieved_titles": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "semantic-photographs-filters",
+      "kind": "capability",
+      "user": "alice",
+      "search": "rag",
+      "query": "photographs of objects learned filters over image patches",
+      "reference": {
+        "retrieved_titles": ["ZXQCNN7 convolutional networks"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQCNN7 convolutional networks"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "semantic-bidirectional-token-mixing",
+      "kind": "capability",
+      "user": "alice",
+      "search": "rag",
+      "query": "bidirectional context token mixing without recurrence",
+      "reference": {
+        "retrieved_titles": ["ZXQBERT7 attention for language"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQBERT7 attention for language"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "semantic-gaussian-posterior",
+      "kind": "capability",
+      "user": "alice",
+      "search": "rag",
+      "query": "maps inputs to a Gaussian posterior compressed latent",
+      "reference": {
+        "retrieved_titles": ["ZXQVAE7 latent variable models"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQVAE7 latent variable models"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "semantic-finance-budget-body",
+      "kind": "capability",
+      "user": "alice",
+      "search": "rag",
+      "query": "finance-approved research budget for 2023",
+      "reference": {
+        "retrieved_ids": ["00000000-0000-4000-8000-000000000021"],
+        "retrieved_titles": ["Annual R&D budget ZXQ-YS-2023-001"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_include": ["00000000-0000-4000-8000-000000000021"]
+        }
+      ]
+    },
+    {
+      "id": "semantic-engineering-acceptance-body",
+      "kind": "capability",
+      "user": "bob",
+      "search": "rag",
+      "query": "hardware acceptance for the engineering lab",
+      "reference": {
+        "retrieved_ids": ["00000000-0000-4000-8000-000000000022"],
+        "retrieved_titles": ["Tech acceptance report ZXQ-HT-2023-014"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_include": ["00000000-0000-4000-8000-000000000022"]
+        }
+      ]
+    },
+    {
+      "id": "catalog-semantic-forgetting",
+      "kind": "capability",
+      "user": "alice",
+      "search": "catalog",
+      "query": "catastrophic forgetting",
+      "reference": {
+        "retrieved_titles": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"]
+        }
+      ]
+    },
+    {
+      "id": "out-of-space-semantic-still-acl",
+      "kind": "capability",
+      "user": "alice",
+      "search": "rag",
+      "query": "hardware acceptance for the engineering lab",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": []
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000022"]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,96 @@
+name: Eval nightly
+
+# Quality suites need a live LLM. They never block merge or deploy.
+# Missing secrets skip the LLM jobs instead of failing the PR CI.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql+asyncpg://researchpilot:researchpilot@localhost:5432/researchpilot
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+      EMBEDDING_BASE_URL: ${{ secrets.EMBEDDING_BASE_URL }}
+      EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+      EMBEDDING_MODEL: ${{ secrets.EMBEDDING_MODEL }}
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: researchpilot
+          POSTGRES_PASSWORD: researchpilot
+          POSTGRES_DB: researchpilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U researchpilot -d researchpilot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run migrations
+        run: uv run alembic upgrade head
+
+      - name: Detect LLM secrets
+        id: llm
+        run: |
+          if [ -n "$LLM_API_KEY" ] && [ -n "$LLM_BASE_URL" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "LLM secrets unset; skipping --llm quality."
+          fi
+
+      - name: Ask quality
+        if: steps.llm.outputs.enabled == 'true'
+        continue-on-error: true
+        run: uv run python -m eval.harness --suite ask-quality --llm
+
+      - name: Chat quality
+        if: steps.llm.outputs.enabled == 'true'
+        continue-on-error: true
+        run: uv run python -m eval.harness --suite chat-quality --llm
+
+      - name: Search quality embeddings
+        if: steps.llm.outputs.enabled == 'true'
+        continue-on-error: true
+        run: uv run python -m eval.harness --suite search-quality --embeddings
+
+  reset-demo:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Nightly demo library reset
+        env:
+          DEMO_URL: ${{ secrets.DEMO_URL }}
+          DEMO_RESET_TOKEN: ${{ secrets.DEMO_RESET_TOKEN }}
+        run: |
+          if [ -z "$DEMO_URL" ] || [ -z "$DEMO_RESET_TOKEN" ]; then
+            echo "DEMO_URL / DEMO_RESET_TOKEN unset; skipping public demo reset."
+            exit 0
+          fi
+          curl -fsS -X POST "${DEMO_URL%/}/api/demo/reset" \
+            -H "X-Demo-Reset-Token: ${DEMO_RESET_TOKEN}"

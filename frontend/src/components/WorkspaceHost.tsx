@@ -65,18 +65,26 @@ export function WorkspaceHost({
   turns,
   onClose,
   composerSlotRef,
+  spaceId,
+  recordIds,
+  onSpaceChange,
+  onRecordIdsChange,
 }: {
   workspace: WorkspaceState | null;
   turns: ChatTurn[];
   onClose: () => void;
   composerSlotRef?: (node: HTMLDivElement | null) => void;
+  spaceId?: string | null;
+  recordIds?: string[];
+  onSpaceChange?: (id: string, name: string) => void;
+  onRecordIdsChange?: (ids: string[]) => void;
 }) {
-  const [tab, setTab] = useState<WorkspaceTab>('conversation');
+  const [tab, setTab] = useState<WorkspaceTab>('library');
   const [workspaceSnapshot, setWorkspaceSnapshot] = useState(workspace);
 
   if (workspace !== workspaceSnapshot) {
     setWorkspaceSnapshot(workspace);
-    setTab(workspace ? 'panel' : 'conversation');
+    setTab(workspace ? 'panel' : 'library');
   }
 
   const showingPanel = tab === 'panel' && workspace != null;
@@ -161,12 +169,17 @@ export function WorkspaceHost({
         </div>
       ) : showingLibrary ? (
         <div className={styles.body}>
-          <Library />
+          <Library
+            spaceId={spaceId ?? null}
+            recordIds={recordIds ?? []}
+            onSpaceChange={onSpaceChange}
+            onRecordIdsChange={onRecordIdsChange}
+          />
         </div>
       ) : (
         <ChatThread turns={turns} />
       )}
-      {tab === 'conversation' ? (
+      {tab === 'conversation' || tab === 'library' ? (
         <div className={styles.composerDock} ref={composerSlotRef} />
       ) : null}
     </section>

@@ -8,6 +8,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
+    AccessionStatus,
     LibraryDocument,
     LibraryDocumentChunk,
     Note,
@@ -19,6 +20,8 @@ from models import (
     PaperStatus,
     ProcessingStatus,
 )
+from services.accession import accessioned_clause
+from services.identity import bound_space_ids, space_clause
 from services.note_links import linked_titles_for_notes, paper_ids_by_note_ids
 
 DEFAULT_TOP_K = 8
@@ -49,6 +52,29 @@ def clamp_top_k(top_k: int | None) -> int:
     if top_k is None:
         return DEFAULT_TOP_K
     return max(1, min(top_k, MAX_TOP_K))
+
+
+def _id_scope(
+    paper_ids: list[uuid.UUID] | None,
+    record_ids: list[uuid.UUID] | None,
+) -> tuple[
+    list[uuid.UUID] | None,
+    list[uuid.UUID] | None,
+    list[uuid.UUID] | None,
+    bool,
+]:
+    """paper_filter, note_ids, document_ids, include_unlinked.
+
+    `record_ids` is collection scope (each table by its own id). `paper_ids`
+    without that is the compare/link path: those papers plus linked notes.
+    """
+    if record_ids is not None:
+        papers = list(record_ids)
+        if paper_ids is not None:
+            allowed = set(paper_ids)
+            papers = [item for item in record_ids if item in allowed]
+        return papers, list(record_ids), list(record_ids), True
+    return paper_ids, None, None, paper_ids is None
 
 
 def snippet_from(text: str, max_chars: int = SNIPPET_CHARS) -> str:
@@ -89,6 +115,7 @@ class LibraryPaperRow:
     abstract: str | None = None
     summary: str | None = None
     digest: dict | None = None
+    accession_status: str = AccessionStatus.accessioned.value
 
 
 @dataclass(frozen=True)
@@ -101,6 +128,7 @@ class LibraryNoteRow:
     linked_titles: tuple[str, ...]
     processing_status: str
     chunk_count: int
+    accession_status: str = AccessionStatus.accessioned.value
 
 
 @dataclass(frozen=True)
@@ -110,6 +138,7 @@ class LibraryDocumentRow:
     original_filename: str
     processing_status: str
     chunk_count: int
+    accession_status: str = AccessionStatus.accessioned.value
 
 
 @dataclass(frozen=True)
@@ -219,12 +248,18 @@ def _apply_rerank(
 
 
 async def list_ready_papers(
-    session: AsyncSession, paper_ids: list[uuid.UUID] | None = None
+    session: AsyncSession,
+    paper_ids: list[uuid.UUID] | None = None,
+    *,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[LibraryPaper]:
     if paper_ids is not None and not paper_ids:
         return []
+    spaces = bound_space_ids(space_ids)
     query = select(Paper.title, Paper.year).where(
-        Paper.processing_status == PaperStatus.ready.value
+        Paper.processing_status == PaperStatus.ready.value,
+        accessioned_clause(Paper.accession_status),
+        space_clause(Paper.space_id, spaces),
     )
     if paper_ids is not None:
         query = query.where(Paper.id.in_(paper_ids))
@@ -232,12 +267,15 @@ async def list_ready_papers(
     return [LibraryPaper(title=title, year=year) for title, year in result.all()]
 
 
-async def list_library_papers(session: AsyncSession) -> list[LibraryPaperRow]:
+async def list_library_papers(
+    session: AsyncSession, *, space_ids: frozenset[uuid.UUID] | None = None
+) -> list[LibraryPaperRow]:
     """Every paper in the library, including the ones still processing.
 
     The agent needs ids and coverage to judge what the library can support,
     so this returns more than the title/year pair `list_ready_papers` gives.
     """
+    spaces = bound_space_ids(space_ids)
     chunk_count = (
         select(func.count(PaperChunk.id))
         .where(PaperChunk.paper_id == Paper.id)
@@ -255,7 +293,10 @@ async def list_library_papers(session: AsyncSession) -> list[LibraryPaperRow]:
             Paper.abstract,
             Paper.summary,
             Paper.digest,
-        ).order_by(Paper.created_at.asc())
+            Paper.accession_status,
+        )
+        .where(space_clause(Paper.space_id, spaces))
+        .order_by(Paper.created_at.asc())
     )
     return [
         LibraryPaperRow(
@@ -268,6 +309,7 @@ async def list_library_papers(session: AsyncSession) -> list[LibraryPaperRow]:
             abstract=abstract,
             summary=summary,
             digest=dict(digest or {}) if digest else {},
+            accession_status=accession_status,
         )
         for (
             paper_id,
@@ -279,13 +321,18 @@ async def list_library_papers(session: AsyncSession) -> list[LibraryPaperRow]:
             abstract,
             summary,
             digest,
+            accession_status,
         ) in result.all()
     ]
 
 
 async def list_library_notes(
-    session: AsyncSession, *, source_types: list[str] | None = None
+    session: AsyncSession,
+    *,
+    source_types: list[str] | None = None,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[LibraryNoteRow]:
+    spaces = bound_space_ids(space_ids)
     chunk_count = (
         select(func.count(NoteChunk.id))
         .where(NoteChunk.note_id == Note.id)
@@ -299,7 +346,8 @@ async def list_library_notes(
         Note.review_status,
         Note.processing_status,
         chunk_count,
-    )
+        Note.accession_status,
+    ).where(space_clause(Note.space_id, spaces))
     if source_types is not None:
         if not source_types:
             return []
@@ -320,6 +368,7 @@ async def list_library_notes(
             linked_titles=titles_by_note.get(note_id, ()),
             processing_status=status,
             chunk_count=count,
+            accession_status=accession_status,
         )
         for (
             note_id,
@@ -328,11 +377,15 @@ async def list_library_notes(
             review_status,
             status,
             count,
+            accession_status,
         ) in rows
     ]
 
 
-async def list_library_documents(session: AsyncSession) -> list[LibraryDocumentRow]:
+async def list_library_documents(
+    session: AsyncSession, *, space_ids: frozenset[uuid.UUID] | None = None
+) -> list[LibraryDocumentRow]:
+    spaces = bound_space_ids(space_ids)
     chunk_count = (
         select(func.count(LibraryDocumentChunk.id))
         .where(LibraryDocumentChunk.document_id == LibraryDocument.id)
@@ -346,7 +399,10 @@ async def list_library_documents(session: AsyncSession) -> list[LibraryDocumentR
             LibraryDocument.original_filename,
             LibraryDocument.processing_status,
             chunk_count,
-        ).order_by(LibraryDocument.created_at.asc())
+            LibraryDocument.accession_status,
+        )
+        .where(space_clause(LibraryDocument.space_id, spaces))
+        .order_by(LibraryDocument.created_at.asc())
     )
     return [
         LibraryDocumentRow(
@@ -355,8 +411,9 @@ async def list_library_documents(session: AsyncSession) -> list[LibraryDocumentR
             original_filename=filename,
             processing_status=status,
             chunk_count=count,
+            accession_status=accession_status,
         )
-        for document_id, title, filename, status, count in result.all()
+        for document_id, title, filename, status, count, accession_status in result.all()
     ]
 
 
@@ -449,17 +506,37 @@ async def search(
     include_documents: bool = True,
     top_k: int = DEFAULT_TOP_K,
     paper_ids: list[uuid.UUID] | None = None,
+    record_ids: list[uuid.UUID] | None = None,
     expand_links: bool = True,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
     limit = clamp_top_k(top_k)
     pool = max(limit * LEXICAL_POOL_MULTIPLIER, limit)
+    spaces = bound_space_ids(space_ids)
+    paper_filter, note_ids, document_ids, include_unlinked = _id_scope(
+        paper_ids, record_ids
+    )
     dense: list[RetrievalHit] = []
     if include_papers:
         dense.extend(
-            await _search_papers(session, query_embedding, pool, paper_ids=paper_ids)
+            await _search_papers(
+                session,
+                query_embedding,
+                pool,
+                paper_ids=paper_filter,
+                space_ids=spaces,
+            )
         )
-    if include_documents and paper_ids is None:
-        dense.extend(await _search_documents(session, query_embedding, pool))
+    if include_documents and include_unlinked:
+        dense.extend(
+            await _search_documents(
+                session,
+                query_embedding,
+                pool,
+                space_ids=spaces,
+                document_ids=document_ids,
+            )
+        )
     dense.extend(
         await _search_notes(
             session,
@@ -467,7 +544,9 @@ async def search(
             include_voice_notes=include_voice_notes,
             include_handwritten_notes=include_handwritten_notes,
             top_k=pool,
-            paper_ids=paper_ids,
+            paper_ids=paper_filter if record_ids is None else None,
+            note_ids=note_ids,
+            space_ids=spaces,
         )
     )
     dense.sort(key=lambda hit: hit.similarity, reverse=True)
@@ -484,6 +563,8 @@ async def search(
             include_documents=include_documents,
             top_k=pool,
             paper_ids=paper_ids,
+            record_ids=record_ids,
+            space_ids=spaces,
         )
 
     if lexical:
@@ -495,7 +576,7 @@ async def search(
         ]
 
     hits = _apply_rerank(text, fused, limit) if text else fused[:limit]
-    if expand_links:
+    if expand_links and record_ids is None:
         hits = await expand_linked_evidence(
             session,
             query_embedding,
@@ -503,6 +584,7 @@ async def search(
             include_papers=include_papers,
             include_voice_notes=include_voice_notes,
             include_handwritten_notes=include_handwritten_notes,
+            space_ids=spaces,
         )
     return hits
 
@@ -515,12 +597,15 @@ async def search_for_paper(
     query_text: str | None = None,
     paper_top_k: int = COMPARE_PAPER_TOP_K,
     note_top_k: int = COMPARE_NOTE_TOP_K,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
+    spaces = bound_space_ids(space_ids)
     paper_hits = await _search_papers(
         session,
         query_embedding,
         paper_top_k * LEXICAL_POOL_MULTIPLIER,
         paper_ids=[paper_id],
+        space_ids=spaces,
     )
     note_hits = await _search_notes(
         session,
@@ -529,6 +614,7 @@ async def search_for_paper(
         include_handwritten_notes=True,
         top_k=note_top_k * LEXICAL_POOL_MULTIPLIER,
         paper_ids=[paper_id],
+        space_ids=spaces,
     )
     text = (query_text or "").strip()
     lexical: list[RetrievalHit] = []
@@ -541,6 +627,7 @@ async def search_for_paper(
             include_handwritten_notes=True,
             top_k=paper_top_k + note_top_k,
             paper_ids=[paper_id],
+            space_ids=spaces,
         )
     dense = paper_hits + note_hits
     dense.sort(key=lambda hit: hit.similarity, reverse=True)
@@ -552,16 +639,22 @@ async def search_for_paper(
 
 
 async def list_linked_notes(
-    session: AsyncSession, paper_ids: list[uuid.UUID]
+    session: AsyncSession,
+    paper_ids: list[uuid.UUID],
+    *,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[LinkedNote]:
     if not paper_ids:
         return []
+    spaces = bound_space_ids(space_ids)
     result = await session.execute(
         select(Note, NotePaper.paper_id)
         .join(NotePaper, NotePaper.note_id == Note.id)
         .where(
             NotePaper.paper_id.in_(paper_ids),
             Note.processing_status == ProcessingStatus.ready.value,
+            accessioned_clause(Note.accession_status),
+            space_clause(Note.space_id, spaces),
         )
         .order_by(Note.created_at.asc())
     )
@@ -717,20 +810,30 @@ async def _title_acronym_hits(
     include_handwritten_notes: bool,
     include_documents: bool,
     paper_ids: list[uuid.UUID] | None,
+    record_ids: list[uuid.UUID] | None = None,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
     wanted = query_acronyms(query_text)
     if not wanted:
         return []
+    spaces = bound_space_ids(space_ids)
+    _paper_filter, note_ids, document_ids, include_unlinked = _id_scope(
+        paper_ids, record_ids
+    )
+
+    def in_scope(item_id: uuid.UUID, allowed: list[uuid.UUID] | None) -> bool:
+        return allowed is None or item_id in allowed
 
     hits: list[RetrievalHit] = []
     if include_papers:
-        papers = await list_library_papers(session)
+        papers = await list_library_papers(session, space_ids=spaces)
         matching = [
             row
             for row in papers
             if row.processing_status == PaperStatus.ready.value
+            and row.accession_status == AccessionStatus.accessioned.value
             and wanted & title_acronyms(row.title)
-            and (paper_ids is None or row.id in paper_ids)
+            and in_scope(row.id, _paper_filter)
         ]
         if matching:
             ids = [row.id for row in matching]
@@ -765,13 +868,17 @@ async def _title_acronym_hits(
         source_types.append(NoteSourceType.voice.value)
     if include_handwritten_notes:
         source_types.append(NoteSourceType.handwritten.value)
-    if source_types and paper_ids is None:
-        notes = await list_library_notes(session, source_types=source_types)
+    if source_types and include_unlinked:
+        notes = await list_library_notes(
+            session, source_types=source_types, space_ids=spaces
+        )
         matching_notes = [
             row
             for row in notes
             if row.processing_status == ProcessingStatus.ready.value
+            and row.accession_status == AccessionStatus.accessioned.value
             and wanted & title_acronyms(row.title)
+            and in_scope(row.id, note_ids)
         ]
         if matching_notes:
             ids = [row.id for row in matching_notes]
@@ -800,13 +907,15 @@ async def _title_acronym_hits(
                     )
                 )
 
-    if include_documents and paper_ids is None:
-        documents = await list_library_documents(session)
+    if include_documents and include_unlinked:
+        documents = await list_library_documents(session, space_ids=spaces)
         matching_docs = [
             row
             for row in documents
             if row.processing_status == ProcessingStatus.ready.value
+            and row.accession_status == AccessionStatus.accessioned.value
             and wanted & title_acronyms(row.title)
+            and in_scope(row.id, document_ids)
         ]
         if matching_docs:
             ids = [row.id for row in matching_docs]
@@ -853,17 +962,35 @@ async def _lexical_search(
     include_documents: bool = True,
     top_k: int,
     paper_ids: list[uuid.UUID] | None = None,
+    record_ids: list[uuid.UUID] | None = None,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
     try:
         hits: list[RetrievalHit] = []
+        spaces = bound_space_ids(space_ids)
+        paper_filter, note_ids, document_ids, include_unlinked = _id_scope(
+            paper_ids, record_ids
+        )
         if include_papers:
             hits.extend(
                 await _lexical_search_papers(
-                    session, query_text, top_k, paper_ids=paper_ids
+                    session,
+                    query_text,
+                    top_k,
+                    paper_ids=paper_filter,
+                    space_ids=spaces,
                 )
             )
-        if include_documents and paper_ids is None:
-            hits.extend(await _lexical_search_documents(session, query_text, top_k))
+        if include_documents and include_unlinked:
+            hits.extend(
+                await _lexical_search_documents(
+                    session,
+                    query_text,
+                    top_k,
+                    space_ids=spaces,
+                    document_ids=document_ids,
+                )
+            )
         hits.extend(
             await _lexical_search_notes(
                 session,
@@ -871,7 +998,9 @@ async def _lexical_search(
                 include_voice_notes=include_voice_notes,
                 include_handwritten_notes=include_handwritten_notes,
                 top_k=top_k,
-                paper_ids=paper_ids,
+                paper_ids=paper_filter if record_ids is None else None,
+                note_ids=note_ids,
+                space_ids=spaces,
             )
         )
         hits.extend(
@@ -883,6 +1012,8 @@ async def _lexical_search(
                 include_handwritten_notes=include_handwritten_notes,
                 include_documents=include_documents,
                 paper_ids=paper_ids,
+                record_ids=record_ids,
+                space_ids=spaces,
             )
         )
         unique: dict[uuid.UUID, RetrievalHit] = {}
@@ -906,15 +1037,19 @@ async def _lexical_search_papers(
     top_k: int,
     *,
     paper_ids: list[uuid.UUID] | None = None,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
     if paper_ids is not None and not paper_ids:
         return []
+    spaces = bound_space_ids(space_ids)
     tsquery = func.plainto_tsquery("simple", query_text)
     chunk_tsv = PaperChunk.tsv
     rank = func.ts_rank_cd(chunk_tsv, tsquery) + _title_boost(Paper.title, query_text)
     conditions = [
         Paper.processing_status == PaperStatus.ready.value,
+        accessioned_clause(Paper.accession_status),
         _lexical_match_clauses(query_text, chunk_tsv, PaperChunk.text, Paper.title),
+        space_clause(Paper.space_id, spaces),
     ]
     if paper_ids is not None:
         conditions.append(Paper.id.in_(paper_ids))
@@ -952,8 +1087,12 @@ async def _lexical_search_notes(
     include_handwritten_notes: bool,
     top_k: int,
     paper_ids: list[uuid.UUID] | None = None,
+    note_ids: list[uuid.UUID] | None = None,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
     if paper_ids is not None and not paper_ids:
+        return []
+    if note_ids is not None and not note_ids:
         return []
     source_types: list[str] = []
     if include_voice_notes:
@@ -962,15 +1101,20 @@ async def _lexical_search_notes(
         source_types.append(NoteSourceType.handwritten.value)
     if not source_types:
         return []
+    spaces = bound_space_ids(space_ids)
     tsquery = func.plainto_tsquery("simple", query_text)
     chunk_tsv = NoteChunk.tsv
     rank = func.ts_rank_cd(chunk_tsv, tsquery) + _title_boost(Note.title, query_text)
     conditions = [
         Note.processing_status == ProcessingStatus.ready.value,
+        accessioned_clause(Note.accession_status),
         Note.source_type.in_(source_types),
         _lexical_match_clauses(query_text, chunk_tsv, NoteChunk.text, Note.title),
+        space_clause(Note.space_id, spaces),
     ]
-    if paper_ids is not None:
+    if note_ids is not None:
+        conditions.append(Note.id.in_(note_ids))
+    elif paper_ids is not None:
         conditions.append(
             Note.id.in_(
                 select(NotePaper.note_id).where(NotePaper.paper_id.in_(paper_ids))
@@ -1006,14 +1150,18 @@ async def _search_papers(
     top_k: int,
     *,
     paper_ids: list[uuid.UUID] | None = None,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
     if paper_ids is not None and not paper_ids:
         return []
 
+    spaces = bound_space_ids(space_ids)
     distance = PaperChunk.embedding.cosine_distance(query_embedding)
     conditions = [
         PaperChunk.embedding.is_not(None),
         Paper.processing_status == PaperStatus.ready.value,
+        accessioned_clause(Paper.accession_status),
+        space_clause(Paper.space_id, spaces),
     ]
     if paper_ids is not None:
         conditions.append(Paper.id.in_(paper_ids))
@@ -1045,15 +1193,26 @@ async def _search_documents(
     session: AsyncSession,
     query_embedding: list[float],
     top_k: int,
+    *,
+    space_ids: frozenset[uuid.UUID] | None = None,
+    document_ids: list[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
+    if document_ids is not None and not document_ids:
+        return []
+    spaces = bound_space_ids(space_ids)
     distance = LibraryDocumentChunk.embedding.cosine_distance(query_embedding)
+    conditions = [
+        LibraryDocumentChunk.embedding.is_not(None),
+        LibraryDocument.processing_status == ProcessingStatus.ready.value,
+        accessioned_clause(LibraryDocument.accession_status),
+        space_clause(LibraryDocument.space_id, spaces),
+    ]
+    if document_ids is not None:
+        conditions.append(LibraryDocument.id.in_(document_ids))
     result = await session.execute(
         select(LibraryDocumentChunk, LibraryDocument, distance.label("distance"))
         .join(LibraryDocument, LibraryDocument.id == LibraryDocumentChunk.document_id)
-        .where(
-            LibraryDocumentChunk.embedding.is_not(None),
-            LibraryDocument.processing_status == ProcessingStatus.ready.value,
-        )
+        .where(*conditions)
         .order_by(distance)
         .limit(top_k)
     )
@@ -1077,21 +1236,32 @@ async def _lexical_search_documents(
     session: AsyncSession,
     query_text: str,
     top_k: int,
+    *,
+    space_ids: frozenset[uuid.UUID] | None = None,
+    document_ids: list[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
+    if document_ids is not None and not document_ids:
+        return []
+    spaces = bound_space_ids(space_ids)
     tsquery = func.plainto_tsquery("simple", query_text)
     chunk_tsv = LibraryDocumentChunk.tsv
     rank = func.ts_rank_cd(chunk_tsv, tsquery) + _title_boost(
         LibraryDocument.title, query_text
     )
+    conditions = [
+        LibraryDocument.processing_status == ProcessingStatus.ready.value,
+        accessioned_clause(LibraryDocument.accession_status),
+        _lexical_match_clauses(
+            query_text, chunk_tsv, LibraryDocumentChunk.text, LibraryDocument.title
+        ),
+        space_clause(LibraryDocument.space_id, spaces),
+    ]
+    if document_ids is not None:
+        conditions.append(LibraryDocument.id.in_(document_ids))
     result = await session.execute(
         select(LibraryDocumentChunk, LibraryDocument, rank.label("lex_rank"))
         .join(LibraryDocument, LibraryDocument.id == LibraryDocumentChunk.document_id)
-        .where(
-            LibraryDocument.processing_status == ProcessingStatus.ready.value,
-            _lexical_match_clauses(
-                query_text, chunk_tsv, LibraryDocumentChunk.text, LibraryDocument.title
-            ),
-        )
+        .where(*conditions)
         .order_by(rank.desc(), LibraryDocumentChunk.chunk_index.asc())
         .limit(top_k)
     )
@@ -1120,8 +1290,12 @@ async def _search_notes(
     include_handwritten_notes: bool,
     top_k: int,
     paper_ids: list[uuid.UUID] | None = None,
+    note_ids: list[uuid.UUID] | None = None,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
     if paper_ids is not None and not paper_ids:
+        return []
+    if note_ids is not None and not note_ids:
         return []
 
     source_types: list[str] = []
@@ -1132,13 +1306,18 @@ async def _search_notes(
     if not source_types:
         return []
 
+    spaces = bound_space_ids(space_ids)
     distance = NoteChunk.embedding.cosine_distance(query_embedding)
     conditions = [
         NoteChunk.embedding.is_not(None),
         Note.processing_status == ProcessingStatus.ready.value,
+        accessioned_clause(Note.accession_status),
         Note.source_type.in_(source_types),
+        space_clause(Note.space_id, spaces),
     ]
-    if paper_ids is not None:
+    if note_ids is not None:
+        conditions.append(Note.id.in_(note_ids))
+    elif paper_ids is not None:
         conditions.append(
             Note.id.in_(
                 select(NotePaper.note_id).where(NotePaper.paper_id.in_(paper_ids))
@@ -1196,8 +1375,10 @@ async def expand_linked_evidence(
     include_papers: bool = True,
     include_voice_notes: bool = True,
     include_handwritten_notes: bool = True,
+    space_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[RetrievalHit]:
     """Pull paper chunks for note hits and note chunks for paper hits."""
+    spaces = bound_space_ids(space_ids)
     annotated = await _annotate_linked_titles(session, hits)
     seen = {hit.chunk_id for hit in annotated}
     extras: list[RetrievalHit] = []
@@ -1226,6 +1407,7 @@ async def expand_linked_evidence(
                 query_embedding,
                 EXPAND_PAPER_TOP_K,
                 paper_ids=[paper_id],
+                space_ids=spaces,
             )
             for hit in paper_hits:
                 if hit.chunk_id in seen:
@@ -1247,6 +1429,7 @@ async def expand_linked_evidence(
                 include_handwritten_notes=include_handwritten_notes,
                 top_k=EXPAND_NOTE_TOP_K,
                 paper_ids=[paper_id],
+                space_ids=spaces,
             )
             for hit in note_hits:
                 if hit.chunk_id in seen:

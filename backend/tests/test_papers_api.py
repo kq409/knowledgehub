@@ -159,3 +159,11 @@ async def test_list_paper_notes(client: AsyncClient):
                 await session.delete(stored)
             await session.commit()
         await client.delete(f"/api/papers/{paper_id}")
+
+
+async def test_paper_upload_forbidden_in_demo(client: AsyncClient, monkeypatch):
+    monkeypatch.setenv("DEMO_MODE", "true")
+    monkeypatch.setenv("DEMO_UPLOADS", "false")
+    files = {"file": ("sample.pdf", b"%PDF-1.4\n%mock\n", "application/pdf")}
+    created = await client.post("/api/papers", files=files)
+    assert created.status_code == 403

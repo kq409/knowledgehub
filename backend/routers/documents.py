@@ -20,6 +20,7 @@ from services.document_pipeline import (
     chunk_count_for,
     mark_document_status,
 )
+from services.identity import IdentityDep, require_visible, space_clause
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -36,12 +37,16 @@ def to_response(document: LibraryDocument, chunk_count: int) -> LibraryDocumentR
         processing_status=PaperStatus(document.processing_status),
         processing_error=document.processing_error,
         chunk_count=chunk_count,
+        revision=int(document.revision or 1),
+        sha256=document.sha256,
+        accession_status=document.accession_status,
         created_at=document.created_at,
         updated_at=document.updated_at,
     )
 
 
 def schedule_document_processing(app: FastAPI, document_id: uuid.UUID) -> None:
+    """Parse/embed this document in-process. Production should use a queue."""
     jobs: set[asyncio.Task] = getattr(app.state, "document_jobs", None)
     if jobs is None:
         jobs = set()
@@ -129,7 +134,7 @@ def _run_parse_and_embed(
 
 @router.get("", response_model=list[LibraryDocumentResponse])
 @router.get("/", response_model=list[LibraryDocumentResponse], include_in_schema=False)
-async def list_documents(session: SessionDep):
+async def list_documents(session: SessionDep, identity: IdentityDep):
     chunk_counts = (
         select(
             LibraryDocumentChunk.document_id,
@@ -141,24 +146,27 @@ async def list_documents(session: SessionDep):
     result = await session.execute(
         select(LibraryDocument, func.coalesce(chunk_counts.c.chunk_count, 0))
         .outerjoin(chunk_counts, chunk_counts.c.document_id == LibraryDocument.id)
+        .where(space_clause(LibraryDocument.space_id, identity.space_ids))
         .order_by(LibraryDocument.updated_at.desc())
     )
     return [to_response(document, int(count)) for document, count in result.all()]
 
 
 @router.get("/{document_id}", response_model=LibraryDocumentResponse)
-async def get_document(document_id: uuid.UUID, session: SessionDep):
+async def get_document(
+    document_id: uuid.UUID, session: SessionDep, identity: IdentityDep
+):
     document = await session.get(LibraryDocument, document_id)
-    if document is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    require_visible(document, identity, kind="Document")
     return to_response(document, await chunk_count_for(session, document.id))
 
 
 @router.get("/{document_id}/file")
-async def download_document_file(document_id: uuid.UUID, session: SessionDep):
+async def download_document_file(
+    document_id: uuid.UUID, session: SessionDep, identity: IdentityDep
+):
     document = await session.get(LibraryDocument, document_id)
-    if document is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    require_visible(document, identity, kind="Document")
     path = Path(document.original_file)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Original file is missing")
@@ -171,11 +179,13 @@ async def download_document_file(document_id: uuid.UUID, session: SessionDep):
 
 @router.patch("/{document_id}", response_model=LibraryDocumentResponse)
 async def update_document(
-    document_id: uuid.UUID, payload: LibraryDocumentUpdate, session: SessionDep
+    document_id: uuid.UUID,
+    payload: LibraryDocumentUpdate,
+    session: SessionDep,
+    identity: IdentityDep,
 ):
     document = await session.get(LibraryDocument, document_id)
-    if document is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    require_visible(document, identity, kind="Document")
     updates = payload.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(document, field, value)
@@ -186,10 +196,11 @@ async def update_document(
 
 
 @router.delete("/{document_id}", status_code=204)
-async def delete_document(document_id: uuid.UUID, session: SessionDep):
+async def delete_document(
+    document_id: uuid.UUID, session: SessionDep, identity: IdentityDep
+):
     document = await session.get(LibraryDocument, document_id)
-    if document is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    require_visible(document, identity, kind="Document")
     path = Path(document.original_file)
     await session.delete(document)
     await session.commit()

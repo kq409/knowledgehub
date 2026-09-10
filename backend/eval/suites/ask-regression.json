@@ -1,0 +1,178 @@
+{
+  "suite": "ask-regression",
+  "trials": 1,
+  "tasks": [
+    {
+      "id": "acronym-ella",
+      "kind": "regression",
+      "query": "ZXQELLA7 lifelong learning",
+      "reference": {
+        "retrieved_titles": [
+          "ZXQELLA7: Efficient Lifelong Learning Algorithm"
+        ],
+        "insufficient_evidence": false,
+        "suggest_external_search": false,
+        "answer": "ZXQELLA7 transfers sparse models across tasks [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "acronym-ella-short",
+      "kind": "regression",
+      "query": "ZXQELLA7",
+      "reference": {
+        "retrieved_titles": [
+          "ZXQELLA7: Efficient Lifelong Learning Algorithm"
+        ],
+        "answer": "ZXQELLA7 transfers sparse models across tasks [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "acronym-bert",
+      "kind": "regression",
+      "query": "ZXQBERT7",
+      "reference": {
+        "retrieved_titles": ["ZXQBERT7 attention for language"],
+        "answer": "ZXQBERT7 mixes tokens with self-attention [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQBERT7 attention for language"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "acronym-vae",
+      "kind": "regression",
+      "query": "ZXQVAE7",
+      "reference": {
+        "retrieved_titles": ["ZXQVAE7 latent variable models"],
+        "answer": "ZXQVAE7 maps inputs to a Gaussian posterior [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQVAE7 latent variable models"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "lexical-algorithm-token",
+      "kind": "regression",
+      "query": "ZXQELLA7 algorithm",
+      "reference": {
+        "retrieved_titles": [
+          "ZXQELLA7: Efficient Lifelong Learning Algorithm"
+        ],
+        "answer": "ZXQELLA7 is an efficient lifelong learning algorithm [1].",
+        "citations": [{ "index": 1 }]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"],
+          "k": 8
+        }
+      ]
+    },
+    {
+      "id": "sota-field-wide",
+      "kind": "regression",
+      "query": "What is the SOTA robot learning algorithm so far in 2026?",
+      "reference": {
+        "retrieved_titles": [],
+        "insufficient_evidence": true,
+        "suggest_external_search": true,
+        "answer": "The library does not have enough evidence for 2026 SOTA robot learning."
+      },
+      "graders": [
+        { "type": "abstain", "expect": "insufficient_evidence" },
+        { "type": "abstain", "expect": "suggest_external_search" }
+      ]
+    },
+    {
+      "id": "sota-chinese",
+      "kind": "regression",
+      "query": "2026年最先进的机器人学习算法是什么？",
+      "reference": {
+        "insufficient_evidence": true,
+        "suggest_external_search": true,
+        "answer": "馆藏证据不足以回答 2026 年最先进的机器人学习算法。"
+      },
+      "graders": [{ "type": "abstain", "expect": "insufficient_evidence" }]
+    },
+    {
+      "id": "sota-latest-progress",
+      "kind": "regression",
+      "query": "What is the latest progress in robot learning as of 2026?",
+      "reference": {
+        "insufficient_evidence": true,
+        "suggest_external_search": true,
+        "answer": "The library does not cover latest 2026 robot-learning progress."
+      },
+      "graders": [{ "type": "abstain", "expect": "insufficient_evidence" }]
+    },
+    {
+      "id": "sota-state-of-the-art",
+      "kind": "regression",
+      "query": "What is the state of the art in lifelong learning so far in 2026?",
+      "reference": {
+        "insufficient_evidence": true,
+        "suggest_external_search": true,
+        "answer": "The library cannot support a 2026 SOTA lifelong-learning claim."
+      },
+      "graders": [{ "type": "abstain", "expect": "insufficient_evidence" }]
+    },
+    {
+      "id": "may-miss-unrelated",
+      "kind": "regression",
+      "query": "quantum gravity in eleven dimensions",
+      "reference": {
+        "insufficient_evidence": true,
+        "suggest_external_search": false,
+        "answer": "The library does not cover quantum gravity."
+      },
+      "graders": [{ "type": "abstain", "expect": "insufficient_evidence" }]
+    },
+    {
+      "id": "may-miss-cooking",
+      "kind": "regression",
+      "query": "how to caramelize onions for a steak sauce",
+      "reference": {
+        "insufficient_evidence": true,
+        "answer": "The library does not cover cooking."
+      },
+      "graders": [{ "type": "abstain", "expect": "insufficient_evidence" }]
+    },
+    {
+      "id": "missing-paper",
+      "kind": "regression",
+      "query": "What does ZXQNONE7 claim about fusion?",
+      "reference": {
+        "insufficient_evidence": true,
+        "answer": "There is no ZXQNONE7 paper in the library."
+      },
+      "graders": [{ "type": "abstain", "expect": "insufficient_evidence" }]
+    }
+  ]
+}

@@ -31,6 +31,7 @@ from schemas import (
     PaperUpdate,
 )
 from services.agent.notifications import FAILED, notify_ingested
+from services.identity import IdentityDep, require_visible, space_clause
 from services.library_ingest import create_pending_paper, validate_pdf_bytes
 from services.note_links import links_by_note_ids, notes_linked_to_paper
 from services.note_pipeline import chunk_count_for as note_chunk_count_for
@@ -70,6 +71,9 @@ def to_response(paper: Paper, chunk_count: int) -> PaperResponse:
         processing_status=PaperStatus(paper.processing_status),
         processing_error=paper.processing_error,
         chunk_count=chunk_count,
+        revision=int(paper.revision or 1),
+        sha256=paper.sha256,
+        accession_status=paper.accession_status,
         created_at=paper.created_at,
         updated_at=paper.updated_at,
     )
@@ -82,12 +86,12 @@ def build_paper_pipeline(embeddings) -> PaperPipeline:
 
 
 def schedule_pipeline_warmup(app: FastAPI) -> None:
-    """Ping GROBID in the background after the API is up."""
+    """Warm the paper parser after the API is up (GROBID no-op when disabled)."""
     if getattr(app.state, "paper_pipeline", None) is not None:
         return
     if getattr(app.state, "paper_pipeline_warmup", None) is not None:
         return
-    print("⏳ Warming up GROBID paper parser...", flush=True)
+    print("⏳ Warming up paper parser...", flush=True)
     app.state.paper_pipeline_warmup = asyncio.create_task(
         asyncio.to_thread(build_paper_pipeline, app.state.embeddings)
     )
@@ -128,6 +132,11 @@ async def ensure_pipeline(app: FastAPI) -> PaperPipeline:
 
 
 def schedule_paper_processing(app: FastAPI, paper_id: uuid.UUID) -> None:
+    """Parse/embed this paper in-process.
+
+    Production should put this on a queue: `asyncio.create_task` dies with
+    the replica, and there is no retry outside this process.
+    """
     jobs: set[asyncio.Task] = getattr(app.state, "paper_jobs", None)
     if jobs is None:
         jobs = set()
@@ -205,6 +214,7 @@ async def resume_missing_digests(app: FastAPI) -> None:
             select(Paper.id).where(
                 Paper.processing_status == PaperStatus.ready.value,
                 Paper.digest_status != DigestStatus.ready.value,
+                Paper.accession_status == "accessioned",
             )
         )
         ids = list(result.scalars().all())
@@ -253,7 +263,11 @@ async def upload_paper(
     request: Request,
     session: SessionDep,
     file: Annotated[UploadFile, File()],
+    identity: IdentityDep,
 ):
+    from services.demo import require_uploads
+
+    require_uploads()
     content = await file.read()
     try:
         filename = validate_pdf_bytes(
@@ -265,7 +279,9 @@ async def upload_paper(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    paper = await create_pending_paper(session, content, filename)
+    paper = await create_pending_paper(
+        session, content, filename, space_id=identity.primary_space_id
+    )
     print(f"⏳ Queued paper for processing: {paper.title} ({paper.id})", flush=True)
     schedule_paper_processing(request.app, paper.id)
     return to_response(paper, 0)
@@ -273,7 +289,7 @@ async def upload_paper(
 
 @router.get("", response_model=list[PaperResponse])
 @router.get("/", response_model=list[PaperResponse], include_in_schema=False)
-async def list_papers(session: SessionDep):
+async def list_papers(session: SessionDep, identity: IdentityDep):
     chunk_counts = (
         select(
             PaperChunk.paper_id,
@@ -285,24 +301,26 @@ async def list_papers(session: SessionDep):
     result = await session.execute(
         select(Paper, func.coalesce(chunk_counts.c.chunk_count, 0))
         .outerjoin(chunk_counts, Paper.id == chunk_counts.c.paper_id)
+        .where(space_clause(Paper.space_id, identity.space_ids))
         .order_by(Paper.created_at.desc())
     )
     return [to_response(paper, int(count)) for paper, count in result.all()]
 
 
 @router.get("/{paper_id}", response_model=PaperResponse)
-async def get_paper(paper_id: uuid.UUID, session: SessionDep):
+async def get_paper(paper_id: uuid.UUID, session: SessionDep, identity: IdentityDep):
     paper = await session.get(Paper, paper_id)
-    if paper is None:
-        raise HTTPException(status_code=404, detail="Paper not found")
+    require_visible(paper, identity, kind="Paper")
+    assert paper is not None
     return to_response(paper, await chunk_count_for(session, paper.id))
 
 
 @router.get("/{paper_id}/chunks", response_model=list[PaperChunkResponse])
-async def list_paper_chunks(paper_id: uuid.UUID, session: SessionDep):
+async def list_paper_chunks(
+    paper_id: uuid.UUID, session: SessionDep, identity: IdentityDep
+):
     paper = await session.get(Paper, paper_id)
-    if paper is None:
-        raise HTTPException(status_code=404, detail="Paper not found")
+    require_visible(paper, identity, kind="Paper")
     result = await session.execute(
         select(PaperChunk)
         .where(PaperChunk.paper_id == paper_id)
@@ -312,11 +330,12 @@ async def list_paper_chunks(paper_id: uuid.UUID, session: SessionDep):
 
 
 @router.get("/{paper_id}/notes", response_model=list[NoteResponse])
-async def list_paper_notes(paper_id: uuid.UUID, session: SessionDep):
+async def list_paper_notes(
+    paper_id: uuid.UUID, session: SessionDep, identity: IdentityDep
+):
     paper = await session.get(Paper, paper_id)
-    if paper is None:
-        raise HTTPException(status_code=404, detail="Paper not found")
-    notes = await notes_linked_to_paper(session, paper_id)
+    require_visible(paper, identity, kind="Paper")
+    notes = await notes_linked_to_paper(session, paper_id, space_ids=identity.space_ids)
     links_map = await links_by_note_ids(session, [note.id for note in notes])
     responses: list[NoteResponse] = []
     for note in notes:
@@ -326,10 +345,11 @@ async def list_paper_notes(paper_id: uuid.UUID, session: SessionDep):
 
 
 @router.get("/{paper_id}/file")
-async def download_paper_file(paper_id: uuid.UUID, session: SessionDep):
+async def download_paper_file(
+    paper_id: uuid.UUID, session: SessionDep, identity: IdentityDep
+):
     paper = await session.get(Paper, paper_id)
-    if paper is None:
-        raise HTTPException(status_code=404, detail="Paper not found")
+    require_visible(paper, identity, kind="Paper")
     path = Path(paper.original_file)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Original PDF is missing")
@@ -341,10 +361,14 @@ async def download_paper_file(paper_id: uuid.UUID, session: SessionDep):
 
 
 @router.patch("/{paper_id}", response_model=PaperResponse)
-async def update_paper(paper_id: uuid.UUID, payload: PaperUpdate, session: SessionDep):
+async def update_paper(
+    paper_id: uuid.UUID,
+    payload: PaperUpdate,
+    session: SessionDep,
+    identity: IdentityDep,
+):
     paper = await session.get(Paper, paper_id)
-    if paper is None:
-        raise HTTPException(status_code=404, detail="Paper not found")
+    require_visible(paper, identity, kind="Paper")
 
     updates = payload.model_dump(exclude_unset=True)
     for field, value in updates.items():
@@ -356,10 +380,9 @@ async def update_paper(paper_id: uuid.UUID, payload: PaperUpdate, session: Sessi
 
 
 @router.delete("/{paper_id}", status_code=204)
-async def delete_paper(paper_id: uuid.UUID, session: SessionDep):
+async def delete_paper(paper_id: uuid.UUID, session: SessionDep, identity: IdentityDep):
     paper = await session.get(Paper, paper_id)
-    if paper is None:
-        raise HTTPException(status_code=404, detail="Paper not found")
+    require_visible(paper, identity, kind="Paper")
     path = Path(paper.original_file)
     await session.delete(paper)
     await session.commit()

@@ -3,13 +3,13 @@ from __future__ import annotations
 import io
 import os
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import LibraryDocument, LibraryDocumentChunk, ProcessingStatus
+from services.accession import apply_processing_outcome, mark_processing_fields
 from services.chunking import ParsedChunk, split_with_overlap
 from services.embeddings import EmbeddingService
 
@@ -114,9 +114,7 @@ async def apply_parse_result(
     )
     document.title = parsed.title or document.title
     document.extracted_text = parsed.extracted_text
-    document.processing_status = ProcessingStatus.ready.value
-    document.processing_error = None
-    document.updated_at = datetime.now(UTC)
+    apply_processing_outcome(document, chunk_count=len(parsed.chunks))
 
     for index, (chunk, embedding) in enumerate(
         zip(parsed.chunks, embeddings, strict=True)
@@ -146,9 +144,7 @@ async def mark_document_status(
     document = await session.get(LibraryDocument, document_id)
     if document is None:
         return
-    document.processing_status = status.value
-    document.processing_error = error
-    document.updated_at = datetime.now(UTC)
+    mark_processing_fields(document, status.value, error)
     await session.commit()
 
 

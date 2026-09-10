@@ -1,15 +1,20 @@
-import { BookOpen, FileText, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { BookOpen, FileText, Trash2, Upload } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import styles from './Library.module.css';
 import type {
+  AccessionStatus,
   LibraryDocument,
   LibraryNote,
+  LibraryRecord,
   Paper,
   ProcessingStatus,
+  RecordPage,
+  SpaceInfo,
 } from '../types';
 import { Box } from './Box';
 import { TextBox } from './TextBox';
 import { RelatedPapersPanel } from './RelatedPapers';
+import { useAppStatus } from '../hooks/appStatus';
 
 type LibraryFilter = 'all' | 'papers' | 'notes' | 'documents';
 type LibraryKind = 'paper' | 'note' | 'document';
@@ -25,10 +30,14 @@ interface LibraryItem {
   title: string;
   updatedAt: string;
   status: ProcessingStatus;
+  accessionStatus: AccessionStatus;
+  revision: number;
+  checksum?: string | null;
   chunkCount: number;
   paper?: Paper;
   note?: LibraryNote;
   document?: LibraryDocument;
+  highlight?: string | null;
 }
 
 function formatDate(value: string): string {
@@ -69,6 +78,10 @@ function statusClass(status: ProcessingStatus): string {
   return `${styles.status} ${styles[status]}`;
 }
 
+function accessionClass(status: AccessionStatus): string {
+  return `${styles.status} ${styles[status]}`;
+}
+
 function kindLabel(item: LibraryItem): string {
   if (item.kind === 'paper') {
     return 'Paper';
@@ -78,6 +91,33 @@ function kindLabel(item: LibraryItem): string {
   }
   return item.note?.source_type === 'handwritten' ? 'Handwritten' : 'Voice';
 }
+
+function kindFromContent(
+  contentType: LibraryRecord['content_type']
+): LibraryKind {
+  if (contentType === 'scholarly_article') {
+    return 'paper';
+  }
+  if (contentType === 'research_note') {
+    return 'note';
+  }
+  return 'document';
+}
+
+function contentFromFilter(filter: LibraryFilter): string | undefined {
+  if (filter === 'papers') {
+    return 'scholarly_article';
+  }
+  if (filter === 'notes') {
+    return 'research_note';
+  }
+  if (filter === 'documents') {
+    return 'document';
+  }
+  return undefined;
+}
+
+const ACTIVE_SPACE_KEY = 'kh-active-space';
 
 function kindClass(item: LibraryItem): string {
   if (item.kind === 'paper') {
@@ -122,48 +162,31 @@ async function readErrorDetail(response: Response): Promise<string> {
   return text || `Request failed (${response.status})`;
 }
 
-function toItems(
-  papers: Paper[],
-  notes: LibraryNote[],
-  documents: LibraryDocument[]
-): LibraryItem[] {
-  const items: LibraryItem[] = [
-    ...papers.map((paper) => ({
-      kind: 'paper' as const,
-      id: paper.id,
-      title: paper.title,
-      updatedAt: paper.updated_at,
-      status: paper.processing_status,
-      chunkCount: paper.chunk_count,
-      paper,
-    })),
-    ...notes.map((note) => ({
-      kind: 'note' as const,
-      id: note.id,
-      title: note.title,
-      updatedAt: note.updated_at,
-      status: note.processing_status,
-      chunkCount: note.chunk_count,
-      note,
-    })),
-    ...documents.map((document) => ({
-      kind: 'document' as const,
-      id: document.id,
-      title: document.title,
-      updatedAt: document.updated_at,
-      status: document.processing_status,
-      chunkCount: document.chunk_count,
-      document,
-    })),
-  ];
-  items.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-  return items;
-}
-
-export function Library() {
+export function Library({
+  spaceId,
+  recordIds,
+  onSpaceChange,
+  onRecordIdsChange,
+}: {
+  spaceId: string | null;
+  recordIds: string[];
+  onSpaceChange?: (id: string, name: string) => void;
+  onRecordIdsChange?: (ids: string[]) => void;
+}) {
+  const { uploads_enabled: uploadsEnabled } = useAppStatus();
   const [papers, setPapers] = useState<Paper[]>([]);
   const [notes, setNotes] = useState<LibraryNote[]>([]);
   const [documents, setDocuments] = useState<LibraryDocument[]>([]);
+  const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
+  const [records, setRecords] = useState<LibraryRecord[]>([]);
+  const [query, setQuery] = useState('');
+  const [uploadKind, setUploadKind] = useState<
+    'auto' | 'paper' | 'note' | 'document'
+  >('auto');
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const queryRef = useRef(query);
+  queryRef.current = query;
   const [selected, setSelected] = useState<SelectedRef | null>(null);
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [isSaving, setIsSaving] = useState(false);
@@ -182,22 +205,51 @@ export function Library() {
   const [draftExtractedText, setDraftExtractedText] = useState('');
   const [draftPaperIds, setDraftPaperIds] = useState<string[]>([]);
 
-  const items = useMemo(
-    () => toItems(papers, notes, documents),
-    [papers, notes, documents]
-  );
-  const visibleItems = useMemo(() => {
-    if (filter === 'papers') {
-      return items.filter((item) => item.kind === 'paper');
-    }
-    if (filter === 'notes') {
-      return items.filter((item) => item.kind === 'note');
-    }
-    if (filter === 'documents') {
-      return items.filter((item) => item.kind === 'document');
-    }
-    return items;
-  }, [items, filter]);
+  const items = useMemo(() => {
+    const byId = {
+      paper: new Map(papers.map((item) => [item.id, item])),
+      note: new Map(notes.map((item) => [item.id, item])),
+      document: new Map(documents.map((item) => [item.id, item])),
+    };
+    return records.map((record) => {
+      const kind = kindFromContent(record.content_type);
+      const paper = kind === 'paper' ? byId.paper.get(record.id) : undefined;
+      const note = kind === 'note' ? byId.note.get(record.id) : undefined;
+      const document =
+        kind === 'document' ? byId.document.get(record.id) : undefined;
+      return {
+        kind,
+        id: record.id,
+        title: record.title,
+        updatedAt: record.updated_at,
+        status:
+          paper?.processing_status ??
+          note?.processing_status ??
+          document?.processing_status ??
+          record.status,
+        accessionStatus:
+          paper?.accession_status ??
+          note?.accession_status ??
+          document?.accession_status ??
+          record.accession_status ??
+          'accessioned',
+        revision:
+          paper?.revision ??
+          note?.revision ??
+          document?.revision ??
+          record.revision,
+        checksum:
+          paper?.sha256 ?? note?.sha256 ?? document?.sha256 ?? record.checksum,
+        chunkCount:
+          paper?.chunk_count ?? note?.chunk_count ?? document?.chunk_count ?? 0,
+        paper,
+        note,
+        document,
+        highlight: record.highlight,
+      };
+    });
+  }, [records, papers, notes, documents]);
+  const visibleItems = items;
 
   const selectedItem =
     items.find(
@@ -262,9 +314,87 @@ export function Library() {
     }
   }, []);
 
+  const loadRecords = useCallback(async () => {
+    try {
+      const type = contentFromFilter(filter);
+      const trimmed = queryRef.current.trim();
+      if (trimmed) {
+        const response = await fetch('/api/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: trimmed,
+            space_id: spaceId,
+            content_type: type,
+            limit: 50,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(await readErrorDetail(response));
+        }
+        const page = (await response.json()) as RecordPage;
+        setRecords(page.items);
+        return;
+      }
+      const params = new URLSearchParams();
+      if (spaceId) {
+        params.set('space_id', spaceId);
+      }
+      if (type) {
+        params.set('content_type', type);
+      }
+      params.set('limit', '50');
+      const response = await fetch(`/api/records?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorDetail(response));
+      }
+      const page = (await response.json()) as RecordPage;
+      setRecords(page.items);
+    } catch (err) {
+      console.error('Failed to load records:', err);
+      setError('Could not load records: ' + networkErrorMessage(err));
+    }
+  }, [filter, spaceId]);
+
+  const loadSpaces = useCallback(async () => {
+    try {
+      const response = await fetch('/api/spaces');
+      if (!response.ok) {
+        throw new Error(await readErrorDetail(response));
+      }
+      const next = (await response.json()) as SpaceInfo[];
+      setSpaces(next);
+      if (next.length === 0) {
+        return;
+      }
+      const stored = window.localStorage.getItem(ACTIVE_SPACE_KEY);
+      const match =
+        next.find((item) => item.id === spaceId) ??
+        next.find((item) => item.id === stored) ??
+        next.find((item) => item.slug === 'default') ??
+        next[0];
+      if (match && match.id !== spaceId) {
+        window.localStorage.setItem(ACTIVE_SPACE_KEY, match.id);
+        onSpaceChange?.(match.id, match.name);
+      }
+    } catch (err) {
+      console.error('Failed to load spaces:', err);
+      setError('Could not load spaces: ' + networkErrorMessage(err));
+    }
+  }, [onSpaceChange, spaceId]);
+
   const loadLibrary = useCallback(async () => {
-    await Promise.all([loadPapers(), loadNotes(), loadDocuments()]);
-  }, [loadPapers, loadNotes, loadDocuments]);
+    await Promise.all([
+      loadPapers(),
+      loadNotes(),
+      loadDocuments(),
+      loadRecords(),
+    ]);
+  }, [loadPapers, loadNotes, loadDocuments, loadRecords]);
+
+  useEffect(() => {
+    void loadSpaces();
+  }, [loadSpaces]);
 
   useEffect(() => {
     void loadLibrary();
@@ -475,6 +605,43 @@ export function Library() {
     );
   };
 
+  const toggleScope = (id: string) => {
+    const next = recordIds.includes(id)
+      ? recordIds.filter((item) => item !== id)
+      : [...recordIds, id];
+    onRecordIdsChange?.(next);
+  };
+
+  const uploadFiles = async (incoming: FileList | File[]) => {
+    const files = Array.from(incoming);
+    if (files.length === 0) {
+      return;
+    }
+    setIsUploading(true);
+    setError(null);
+    try {
+      for (const file of files) {
+        const form = new FormData();
+        form.append('file', file, file.name);
+        if (uploadKind !== 'auto') {
+          form.append('kind', uploadKind);
+        }
+        const response = await fetch('/api/library/upload', {
+          method: 'POST',
+          body: form,
+        });
+        if (!response.ok) {
+          throw new Error(await readErrorDetail(response));
+        }
+      }
+      await loadLibrary();
+    } catch (err) {
+      setError('Upload failed: ' + networkErrorMessage(err));
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   return (
     <div className={`${styles.library} ${styles.compact}`}>
       {error && (
@@ -487,6 +654,112 @@ export function Library() {
       )}
 
       <Box header="Library" icon={BookOpen} compact>
+        {spaces.length > 0 ? (
+          <div className={styles.filters} role="tablist" aria-label="Spaces">
+            {spaces.map((space) => (
+              <button
+                key={space.id}
+                type="button"
+                role="tab"
+                aria-selected={space.id === spaceId}
+                className={`${styles.filterChip} ${
+                  space.id === spaceId ? styles.active : ''
+                }`}
+                onClick={() => {
+                  window.localStorage.setItem(ACTIVE_SPACE_KEY, space.id);
+                  onSpaceChange?.(space.id, space.name);
+                }}
+              >
+                {space.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <form
+          className={styles.searchRow}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void loadRecords();
+          }}
+        >
+          <input
+            className={styles.searchInput}
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search a document number or title…"
+            aria-label="Search this space"
+          />
+          <button type="submit" className={styles.secondaryButton}>
+            Search
+          </button>
+        </form>
+        <div className={styles.uploadRow}>
+          {uploadsEnabled ? (
+            <>
+              <label className={styles.kindLabel} htmlFor="library-upload-kind">
+                File as
+              </label>
+              <select
+                id="library-upload-kind"
+                className={styles.kindSelect}
+                value={uploadKind}
+                onChange={(event) =>
+                  setUploadKind(
+                    event.target.value as 'auto' | 'paper' | 'note' | 'document'
+                  )
+                }
+              >
+                <option value="auto">Auto (AI suggests)</option>
+                <option value="paper">Paper</option>
+                <option value="note">Note</option>
+                <option value="document">Document</option>
+              </select>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+              >
+                <Upload className={styles.icon} />
+                {isUploading ? 'Uploading…' : 'Upload'}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className={styles.hiddenInput}
+                accept=".pdf,.md,.txt,.csv,.docx,application/pdf"
+                onChange={(event) => {
+                  if (event.target.files?.length) {
+                    void uploadFiles(event.target.files);
+                  }
+                  event.target.value = '';
+                }}
+              />
+            </>
+          ) : (
+            <span className={styles.hint}>
+              Uploads are disabled on the public demo.
+            </span>
+          )}
+          {recordIds.length > 0 ? (
+            <>
+              <span className={styles.hint}>
+                Chat is scoped to {recordIds.length} file
+                {recordIds.length === 1 ? '' : 's'}
+              </span>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                onClick={() => onRecordIdsChange?.([])}
+              >
+                Clear
+              </button>
+            </>
+          ) : (
+            <span className={styles.hint}>Tick files to ask this set</span>
+          )}
+        </div>
         <div
           className={styles.filters}
           role="tablist"
@@ -516,7 +789,7 @@ export function Library() {
         </div>
         {visibleItems.length === 0 ? (
           <p className={styles.empty}>
-            Nothing here yet. Attach a file in Chat — or save a voice note.
+            Nothing in this space yet. Upload a file or switch spaces.
           </p>
         ) : (
           <ul className={styles.list}>
@@ -529,6 +802,14 @@ export function Library() {
                       : ''
                   }`}
                 >
+                  <label className={styles.scopeCheck}>
+                    <input
+                      type="checkbox"
+                      checked={recordIds.includes(item.id)}
+                      onChange={() => toggleScope(item.id)}
+                      aria-label={`Ask about ${item.title}`}
+                    />
+                  </label>
                   <button
                     type="button"
                     className={styles.selectButton}
@@ -537,11 +818,18 @@ export function Library() {
                     }
                   >
                     <span className={styles.itemTitle}>{item.title}</span>
+                    {item.highlight ? (
+                      <span className={styles.highlight}>{item.highlight}</span>
+                    ) : null}
                     <span className={styles.itemMeta}>
                       <span className={kindClass(item)}>{kindLabel(item)}</span>
                       <span className={statusClass(item.status)}>
                         {item.status}
                       </span>
+                      <span className={accessionClass(item.accessionStatus)}>
+                        {item.accessionStatus}
+                      </span>
+                      <span>r{item.revision}</span>
                       <span>{item.chunkCount} chunks</span>
                       {item.note && linkedPaperLabel(item.note, papers) ? (
                         <span>
@@ -566,12 +854,15 @@ export function Library() {
         )}
       </Box>
 
-      {selectedPaper && (
+      {selectedPaper && selectedItem && (
         <Box header="Paper Details" icon={FileText} compact>
           <div className={styles.metaRow}>
             <span className={`${styles.source} ${styles.paper}`}>Paper</span>
             <span className={statusClass(selectedPaper.processing_status)}>
               {selectedPaper.processing_status}
+            </span>
+            <span className={accessionClass(selectedItem.accessionStatus)}>
+              {selectedItem.accessionStatus}
             </span>
             <span className={styles.metaText}>
               {selectedPaper.page_count != null
@@ -579,6 +870,10 @@ export function Library() {
                 : 'Pages unknown'}
               {' · '}
               {selectedPaper.chunk_count} chunks
+              {' · '}r{selectedItem.revision}
+              {selectedItem.checksum
+                ? ` · sha256 ${selectedItem.checksum.slice(0, 12)}…`
+                : ''}
               {' · '}
               {selectedPaper.original_filename}
             </span>
@@ -710,7 +1005,7 @@ export function Library() {
         </Box>
       )}
 
-      {selectedDocument && (
+      {selectedDocument && selectedItem && (
         <Box header="Document Details" icon={FileText} compact>
           <div className={styles.metaRow}>
             <span className={`${styles.source} ${styles.document}`}>
@@ -719,8 +1014,15 @@ export function Library() {
             <span className={statusClass(selectedDocument.processing_status)}>
               {selectedDocument.processing_status}
             </span>
+            <span className={accessionClass(selectedItem.accessionStatus)}>
+              {selectedItem.accessionStatus}
+            </span>
             <span className={styles.metaText}>
               {selectedDocument.chunk_count} chunks
+              {' · '}r{selectedItem.revision}
+              {selectedItem.checksum
+                ? ` · sha256 ${selectedItem.checksum.slice(0, 12)}…`
+                : ''}
               {' · '}
               {selectedDocument.original_filename}
             </span>
@@ -762,7 +1064,7 @@ export function Library() {
         </Box>
       )}
 
-      {selectedNote && (
+      {selectedNote && selectedItem && (
         <Box header="Note Details" icon={FileText} compact>
           <div className={styles.metaRow}>
             <span
@@ -774,6 +1076,9 @@ export function Library() {
             </span>
             <span className={statusClass(selectedNote.processing_status)}>
               {selectedNote.processing_status}
+            </span>
+            <span className={accessionClass(selectedItem.accessionStatus)}>
+              {selectedItem.accessionStatus}
             </span>
             <span className={styles.metaText}>
               {selectedNote.source_type === 'handwritten'

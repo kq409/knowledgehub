@@ -153,6 +153,8 @@ async def run_spawned_subagent(
         todo_store=None,
         depth=parent_ctx.depth + 1,
         subagent_budget=0,
+        user_id=parent_ctx.user_id,
+        space_ids=parent_ctx.space_ids,
     )
 
     # The nested pass gets its own hook chain: a read-only policy, and the same

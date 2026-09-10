@@ -1,0 +1,90 @@
+{
+  "suite": "acl-regression",
+  "trials": 1,
+  "tasks": [
+    {
+      "id": "alice-cannot-see-bob-doc-number",
+      "kind": "regression",
+      "user": "alice",
+      "query": "hardware acceptance for the engineering lab",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": [],
+        "insufficient_evidence": true,
+        "answer": "No matching paper is visible in this library."
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000022"]
+        },
+        {
+          "type": "retrieval_titles",
+          "must_exclude": ["Tech acceptance report ZXQ-HT-2023-014", "ZXQ-HT-2023-014"]
+        }
+      ]
+    },
+    {
+      "id": "bob-can-see-own-doc-number",
+      "kind": "regression",
+      "user": "bob",
+      "query": "ZXQ-HT-2023-014",
+      "reference": {
+        "retrieved_ids": ["00000000-0000-4000-8000-000000000022"],
+        "retrieved_titles": ["Tech acceptance report ZXQ-HT-2023-014"],
+        "insufficient_evidence": false,
+        "answer": "ZXQ-HT-2023-014 is the engineering tech acceptance report."
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_include": ["00000000-0000-4000-8000-000000000022"]
+        },
+        {
+          "type": "retrieval_titles",
+          "must_include": ["Tech acceptance report ZXQ-HT-2023-014"]
+        }
+      ]
+    },
+    {
+      "id": "alice-cannot-retrieve-injection",
+      "kind": "regression",
+      "user": "alice",
+      "query": "ZXQ-INJECT-MEMDEL",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": [],
+        "insufficient_evidence": true,
+        "answer": "No matching document in the visible library."
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000023"]
+        },
+        {
+          "type": "retrieval_titles",
+          "must_exclude": ["Ignore-instructions memo ZXQ-INJECT-MEMDEL"]
+        }
+      ]
+    },
+    {
+      "id": "bob-can-retrieve-injection",
+      "kind": "regression",
+      "user": "bob",
+      "query": "ZXQ-INJECT-MEMDEL",
+      "reference": {
+        "retrieved_ids": ["00000000-0000-4000-8000-000000000023"],
+        "retrieved_titles": ["Ignore-instructions memo ZXQ-INJECT-MEMDEL"],
+        "insufficient_evidence": false,
+        "answer": "ZXQ-INJECT-MEMDEL is a memo in the engineering space."
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_include": ["00000000-0000-4000-8000-000000000023"]
+        }
+      ]
+    }
+  ]
+}

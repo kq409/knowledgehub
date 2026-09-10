@@ -1,0 +1,213 @@
+{
+  "suite": "search-regression",
+  "trials": 1,
+  "tasks": [
+    {
+      "id": "catalog-alice-doc-number",
+      "kind": "regression",
+      "user": "alice",
+      "search": "catalog",
+      "query": "ZXQ-YS-2023-001",
+      "reference": {
+        "retrieved_ids": ["00000000-0000-4000-8000-000000000021"],
+        "retrieved_titles": ["Annual R&D budget ZXQ-YS-2023-001"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_include": ["00000000-0000-4000-8000-000000000021"]
+        }
+      ]
+    },
+    {
+      "id": "catalog-alice-miss-bob-number",
+      "kind": "regression",
+      "user": "alice",
+      "search": "catalog",
+      "query": "ZXQ-HT-2023-014",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": []
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000022"]
+        }
+      ]
+    },
+    {
+      "id": "catalog-bob-doc-number",
+      "kind": "regression",
+      "user": "bob",
+      "search": "catalog",
+      "query": "ZXQ-HT-2023-014",
+      "reference": {
+        "retrieved_ids": ["00000000-0000-4000-8000-000000000022"],
+        "retrieved_titles": ["Tech acceptance report ZXQ-HT-2023-014"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_include": ["00000000-0000-4000-8000-000000000022"]
+        }
+      ]
+    },
+    {
+      "id": "catalog-bob-miss-alice-number",
+      "kind": "regression",
+      "user": "bob",
+      "search": "catalog",
+      "query": "ZXQ-YS-2023-001",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": []
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000021"]
+        }
+      ]
+    },
+    {
+      "id": "catalog-alice-miss-injection",
+      "kind": "regression",
+      "user": "alice",
+      "search": "catalog",
+      "query": "ZXQ-INJECT-MEMDEL",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": []
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000023"]
+        }
+      ]
+    },
+    {
+      "id": "catalog-bob-injection",
+      "kind": "regression",
+      "user": "bob",
+      "search": "catalog",
+      "query": "ZXQ-INJECT-MEMDEL",
+      "reference": {
+        "retrieved_ids": ["00000000-0000-4000-8000-000000000023"],
+        "retrieved_titles": ["Ignore-instructions memo ZXQ-INJECT-MEMDEL"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_include": ["00000000-0000-4000-8000-000000000023"]
+        }
+      ]
+    },
+    {
+      "id": "catalog-finance-space-filter",
+      "kind": "regression",
+      "user": "alice",
+      "search": "catalog",
+      "space_id": "00000000-0000-4000-8000-000000000010",
+      "query": "budget",
+      "reference": {
+        "retrieved_ids": ["00000000-0000-4000-8000-000000000021"],
+        "retrieved_titles": ["Annual R&D budget ZXQ-YS-2023-001"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_include": ["00000000-0000-4000-8000-000000000021"],
+          "must_exclude": ["00000000-0000-4000-8000-000000000022"]
+        }
+      ]
+    },
+    {
+      "id": "catalog-facet-scholarly",
+      "kind": "regression",
+      "user": "bob",
+      "search": "catalog",
+      "content_type": "scholarly_article",
+      "query": "ZXQ-INJECT-MEMDEL",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": []
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000023"]
+        }
+      ]
+    },
+    {
+      "id": "catalog-zxqella-default",
+      "kind": "regression",
+      "user": "alice",
+      "search": "catalog",
+      "query": "ZXQELLA7",
+      "reference": {
+        "retrieved_titles": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_include": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"]
+        }
+      ]
+    },
+    {
+      "id": "rag-alice-miss-bob-same-acl",
+      "kind": "regression",
+      "user": "alice",
+      "search": "rag",
+      "query": "ZXQ-HT-2023-014",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": []
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000022"]
+        }
+      ]
+    },
+    {
+      "id": "rag-bob-doc-number",
+      "kind": "regression",
+      "user": "bob",
+      "search": "rag",
+      "query": "ZXQ-HT-2023-014",
+      "reference": {
+        "retrieved_ids": ["00000000-0000-4000-8000-000000000022"],
+        "retrieved_titles": ["Tech acceptance report ZXQ-HT-2023-014"]
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_include": ["00000000-0000-4000-8000-000000000022"]
+        }
+      ]
+    },
+    {
+      "id": "rag-scoped-record-ids",
+      "kind": "regression",
+      "user": "alice",
+      "search": "rag",
+      "record_ids": ["00000000-0000-4000-8000-000000000021"],
+      "query": "ZXQELLA7",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": []
+      },
+      "graders": [
+        {
+          "type": "retrieval_titles",
+          "must_exclude": ["ZXQELLA7: Efficient Lifelong Learning Algorithm"]
+        }
+      ]
+    }
+  ]
+}

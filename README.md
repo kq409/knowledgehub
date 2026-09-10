@@ -198,19 +198,90 @@ npm run build
 
 Set `DATABASE_URL` (see `backend/.env.example`). Without it, API tests that need Postgres skip and the suite can look green while skipping most coverage.
 
-This CI does not deploy the app.
+Eval **regression** is the promotion condition: if those suites fail, CI is red and [Deploy](.github/workflows/deploy.yml) does not run. Nightly `--llm` quality never blocks merge or rolls back production.
+
+### Continual distribution
+
+```mermaid
+flowchart LR
+  PR[Pull request] --> CI[lint / pytest]
+  CI --> Eval[eval regression]
+  Eval -->|green| Merge[merge main]
+  Eval -->|red| NoDeploy[no deploy]
+  Merge --> Image[Docker build]
+  Image --> Fly[Fly.io 1 Machine]
+  Fly --> Ready["GET /api/readyz"]
+  Nightly[nightly quality --llm] -.->|does not rollback| Fly
+```
+
+Public demo is a **thin** config, not the 16GB devcontainer:
+
+| Dependency | Demo |
+|---|---|
+| Chat LLM | Cloud OpenAI-compatible (DeepSeek). Keys stay on the host. |
+| Embeddings | Separate `EMBEDDING_*` host. Never point chat URL at embed. |
+| Postgres + pgvector | Neon / Supabase, not on the API machine. |
+| GROBID | Off; papers parse with pypdf. GROBID stays in local / 录屏. |
+| Whisper | `WHISPER_ENABLED=false`; mic UI is hidden. |
+| Object storage | Fly volume at `/data` (`Storage` protocol). |
+| Replicas | **1**. Approval Futures cannot cross machines. |
+
+`Dockerfile` + `fly.toml` are in the repo. First deploy is `fly launch` (creates `*.fly.dev`). Create volume `knowledgehub_data`, set secrets (`DATABASE_URL`, `LLM_*`, `EMBEDDING_*`, `EVAL_TOKEN`, `DEMO_RESET_TOKEN`), then `fly deploy`. GitHub `FLY_API_TOKEN` empty → deploy job **skips** so forks stay green.
+
+**Approximate cost:** Fly shared-cpu 1GB ~$6/mo (kept running so a stranger is not stuck on a cold start) + 1GB volume + Neon free tier + pay-per-token chat. Nightly quality adds LLM spend only when secrets exist.
+
+**ACL demo script** (header switcher is `X-User-Id`, not SSO):
+
+1. Open the demo as **alice**. Search `ZXQ-YS-2023-001` — the finance budget paper is visible.
+2. Switch to **bob** and reload. That document number disappears; `ZXQ-HT-2023-014` is visible instead.
+3. Chat/Ask as bob must not cite alice's budget. Uploads, mic, and `POST /api/eval/run` stay locked.
+
+### What this repo does not do yet
+
+- SSO / real identity (alice/bob is a stub)
+- Multi-replica approvals or a shared approval store
+- Ingest job queue (parse/embed still `asyncio.create_task` in-process)
+- Kubernetes, blue-green, or SharePoint
+- MinIO/S3 (local disk implements `Storage`)
+- GROBID / Whisper on the public demo
+- 保管期限 / 四性 / real customer records
 
 ### Evaluation
 
-Ask (retrieval + abstain + citations) and Chat (tool/outcome) suites live in `backend/eval/suites/`. They seed a tagged synthetic ZXQ* library, run the production `AskService` / `ResearchAgent`, and write transcripts to `backend/eval/runs/`.
+Eval suites live in `backend/eval/suites/`. They seed a tagged synthetic ZXQ* library. **Keyword embeddings used without `--llm` only prove the fixture and graders agree** — they are not a retrieval-quality score.
+
+| Suite | What it measures | CI | LLM |
+|---|---|---|---|
+| `ask-regression` | Acronym retrieval + abstain flags | Gate (must pass) | No |
+| `chat-regression` | Outcome/citation/abstain references; with `--llm`, the production agent | Gate without `--llm` (references) | Optional |
+| `acl-regression` | Space ACL: Alice cannot retrieve Bob's records | Gate (must pass) | No |
+| `search-regression` | Catalog search + same ACL SQL as RAG (doc numbers, space filter) | Gate (must pass) | No |
+| `discipline-regression` | Un-accessioned originals stay out of search; blank OCR abstains | Gate (must pass) | No |
+| `ask-quality` | Semantic retrieval, coverage facts, faithfulness | Nightly only | Optional / `--llm` |
+| `chat-quality` | Grounded answers, pass@k / pass^k, in-scope / out-of-scope | Nightly only | `--llm` |
+| `search-quality` | Semantic qrels; **real vectors** with `--embeddings` | Nightly only | `--embeddings` (not SOTA) |
 
 ```bash
 cd backend
-uv run python -m eval.harness --suite ask
-uv run python -m eval.harness --suite chat --llm
+# CD gate (same as GitHub Actions)
+uv run python -m eval.harness --check-references --suite all
+uv run python -m eval.harness --suite ask-regression
+uv run python -m eval.harness --suite chat-regression
+uv run python -m eval.harness --suite acl-regression
+uv run python -m eval.harness --suite search-regression
+uv run python -m eval.harness --suite discipline-regression
+
+# Quality (does not block merge)
+uv run python -m eval.harness --suite ask-quality --llm
+uv run python -m eval.harness --suite chat-quality --llm
+uv run python -m eval.harness --suite search-quality --embeddings
 ```
 
-Without `--llm`, Ask uses keyword embeddings and a stub completer so retrieval graders run offline. Open the Eval panel in the app header to browse the latest run and transcripts. `POST /api/eval/run?suite=ask` triggers the same Ask suite.
+Aliases: `--suite ask` runs both Ask suites; `--suite chat` both Chat suites. Regression failure exits 1 (`gate: fail`). Quality failures do not fail the regression gate.
+
+Open the Eval panel in the app header to read the **first failing transcript**. `POST /api/eval/run?suite=ask-regression` triggers the Ask regression gate.
+
+See [backend/eval/README.md](backend/eval/README.md) for grader rules and how to read pass@1 vs pass^k.
 
 ### MCP (read-only library tools)
 
@@ -239,7 +310,26 @@ anything not on `allow` needs in-chat approval.
 Write tools in Chat (`memory_write`, `memory_delete`, `link_note`,
 `unlink_note`, `connect_note`) pause for a researcher click unless
 `ASK_APPROVAL_MODE=off`. The wait is process-local: the replica that started
-the turn must receive `POST /api/chat/approve`.
+the turn must receive `POST /api/chat/approve`. That is also the cataloging
+"pending review" queue — there is no second accession table for links.
+
+### Preservation vs use
+
+Library records keep two layers:
+
+- **Preservation:** the original bytes, a SHA-256 checksum, and a revision
+  number. `put` on an existing storage key fails. A new file is a new revision
+  (`data/{kind}/{id}/rN.ext`). Local disk implements a `Storage` protocol so a
+  later S3 swap does not rewrite ingest.
+- **Use:** chunk/vector indexes. Rebuildable. Search and Ask only see records
+  with `accession_status=accessioned`. Uploads start as `received`. Empty
+  extractable text (blank or unscanned PDF) is `rejected` and Ask abstains.
+
+Ingest still runs as `asyncio.create_task` in this process. A production
+deploy should put parse/embed on a queue.
+
+Optional OCR experiment: download a handful of FUNSD or DocVQA pages locally.
+Do not vendor those datasets in this repo.
 
 Hybrid lexical search uses stored `tsvector` columns. Optional FlashRank rerank: set `RERANK_ENABLED=true` (downloads a small ONNX model on first use). Ask/Chat traces always append JSONL under `data/traces/`; set `OPIK_API_KEY` to also send them to Comet Opik.
 

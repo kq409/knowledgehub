@@ -52,6 +52,7 @@ from services.connect import (
     empty_connect_response,
     response_from_stored,
 )
+from services.identity import IdentityDep, require_visible, space_clause
 from services.library_ingest import (
     create_pending_handwritten_note,
     validate_pdf_bytes,
@@ -176,6 +177,9 @@ def to_response(
         processing_status=NoteStatus(note.processing_status),
         processing_error=note.processing_error,
         chunk_count=chunk_count,
+        revision=int(note.revision or 1),
+        sha256=note.sha256,
+        accession_status=note.accession_status,
         created_at=note.created_at,
         updated_at=note.updated_at,
     )
@@ -232,6 +236,7 @@ async def ensure_pipeline(app: FastAPI) -> NotePipeline:
 
 
 def schedule_note_processing(app: FastAPI, note_id: uuid.UUID) -> None:
+    """Parse/embed this note in-process. Production should use a queue."""
     jobs: set[asyncio.Task] = getattr(app.state, "note_jobs", None)
     if jobs is None:
         jobs = set()
@@ -411,9 +416,11 @@ async def create_note(
     request: Request,
     session: SessionDep,
     payload: NoteCreate,
+    identity: IdentityDep,
 ):
     note = Note(
         source_type=NoteSourceType.voice.value,
+        space_id=identity.primary_space_id,
         title=payload.title,
         summary=payload.summary,
         observations=payload.observations,
@@ -447,7 +454,11 @@ async def upload_note(
     request: Request,
     session: SessionDep,
     file: Annotated[UploadFile, File()],
+    identity: IdentityDep,
 ):
+    from services.demo import require_uploads
+
+    require_uploads()
     content = await file.read()
     try:
         filename = validate_pdf_bytes(
@@ -459,7 +470,9 @@ async def upload_note(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    note = await create_pending_handwritten_note(session, content, filename)
+    note = await create_pending_handwritten_note(
+        session, content, filename, space_id=identity.primary_space_id
+    )
     print(f"⏳ Queued PDF note for processing: {note.title} ({note.id})", flush=True)
     schedule_note_processing(request.app, note.id)
     return to_response(note, 0)
@@ -469,6 +482,7 @@ async def upload_note(
 @router.get("/", response_model=list[NoteResponse], include_in_schema=False)
 async def list_notes(
     session: SessionDep,
+    identity: IdentityDep,
     source_type: Annotated[NoteSourceTypeSchema | None, Query()] = None,
 ):
     chunk_counts = (
@@ -482,6 +496,7 @@ async def list_notes(
     query = (
         select(Note, func.coalesce(chunk_counts.c.chunk_count, 0))
         .outerjoin(chunk_counts, Note.id == chunk_counts.c.note_id)
+        .where(space_clause(Note.space_id, identity.space_ids))
         .order_by(Note.created_at.desc())
     )
     if source_type is not None:
@@ -496,10 +511,9 @@ async def list_notes(
 
 
 @router.get("/{note_id}", response_model=NoteResponse)
-async def get_note(note_id: uuid.UUID, session: SessionDep):
+async def get_note(note_id: uuid.UUID, session: SessionDep, identity: IdentityDep):
     note = await session.get(Note, note_id)
-    if note is None:
-        raise HTTPException(status_code=404, detail="Note not found")
+    require_visible(note, identity, kind="Note")
     return to_response_with_links(
         note,
         await chunk_count_for(session, note.id),
@@ -508,10 +522,11 @@ async def get_note(note_id: uuid.UUID, session: SessionDep):
 
 
 @router.get("/{note_id}/chunks", response_model=list[NoteChunkResponse])
-async def list_note_chunks(note_id: uuid.UUID, session: SessionDep):
+async def list_note_chunks(
+    note_id: uuid.UUID, session: SessionDep, identity: IdentityDep
+):
     note = await session.get(Note, note_id)
-    if note is None:
-        raise HTTPException(status_code=404, detail="Note not found")
+    require_visible(note, identity, kind="Note")
     result = await session.execute(
         select(NoteChunk)
         .where(NoteChunk.note_id == note_id)
@@ -521,10 +536,11 @@ async def list_note_chunks(note_id: uuid.UUID, session: SessionDep):
 
 
 @router.get("/{note_id}/file")
-async def download_note_file(note_id: uuid.UUID, session: SessionDep):
+async def download_note_file(
+    note_id: uuid.UUID, session: SessionDep, identity: IdentityDep
+):
     note = await session.get(Note, note_id)
-    if note is None:
-        raise HTTPException(status_code=404, detail="Note not found")
+    require_visible(note, identity, kind="Note")
     if not note.original_file:
         raise HTTPException(status_code=404, detail="Original PDF is missing")
     path = Path(note.original_file)
@@ -542,8 +558,11 @@ async def connect_note_to_literature(
     note_id: uuid.UUID,
     session: SessionDep,
     connect_service: ConnectDep,
+    identity: IdentityDep,
     payload: ConnectRequest | None = None,
 ):
+    note = await session.get(Note, note_id)
+    require_visible(note, identity, kind="Note")
     try:
         return await connect_service.connect(
             session, note_id, payload or ConnectRequest()
@@ -567,10 +586,11 @@ async def connect_note_to_literature(
 
 
 @router.get("/{note_id}/related", response_model=ConnectResponse)
-async def get_related_papers(note_id: uuid.UUID, session: SessionDep):
+async def get_related_papers(
+    note_id: uuid.UUID, session: SessionDep, identity: IdentityDep
+):
     note = await session.get(Note, note_id)
-    if note is None:
-        raise HTTPException(status_code=404, detail="Note not found")
+    require_visible(note, identity, kind="Note")
     stored = response_from_stored(note)
     if stored is None:
         raise HTTPException(status_code=404, detail="No related-papers run stored yet")
@@ -583,10 +603,10 @@ async def update_note(
     note_id: uuid.UUID,
     payload: NoteUpdate,
     session: SessionDep,
+    identity: IdentityDep,
 ):
     note = await session.get(Note, note_id)
-    if note is None:
-        raise HTTPException(status_code=404, detail="Note not found")
+    require_visible(note, identity, kind="Note")
 
     updates = payload.model_dump(exclude_unset=True)
     if "review_status" in updates and updates["review_status"] is not None:
@@ -617,10 +637,9 @@ async def update_note(
 
 
 @router.delete("/{note_id}", status_code=204)
-async def delete_note(note_id: uuid.UUID, session: SessionDep):
+async def delete_note(note_id: uuid.UUID, session: SessionDep, identity: IdentityDep):
     note = await session.get(Note, note_id)
-    if note is None:
-        raise HTTPException(status_code=404, detail="Note not found")
+    require_visible(note, identity, kind="Note")
     path = Path(note.original_file) if note.original_file else None
     await session.delete(note)
     await session.commit()

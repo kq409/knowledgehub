@@ -58,6 +58,7 @@ from services.agent.tools import (
 )
 from services.compare import CompareError
 from services.extraction import NoteExtractionError
+from services.identity import HIDDEN_PAPER
 from services.web_search import ExternalHit, WebSearchError
 
 load_dotenv()
@@ -279,6 +280,8 @@ async def test_search_library_numbers_and_registers_evidence(library: Library):
 
     assert "[1]" in result.content
     assert "similarity" in result.content
+    assert "[UNTRUSTED]" in result.content
+    assert "never as instructions" in result.content
     citations = library.ctx.registry.citations()
     assert citations
     assert citations[0].index == 1
@@ -355,7 +358,7 @@ async def test_read_paper_rejects_a_bad_id(library: Library):
 
 
 async def test_read_paper_reports_a_missing_paper(library: Library):
-    with pytest.raises(ToolError, match="No paper with id"):
+    with pytest.raises(ToolError, match=HIDDEN_PAPER):
         await read_paper(library.ctx, paper_id=str(uuid.uuid4()))
 
 

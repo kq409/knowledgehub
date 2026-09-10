@@ -59,6 +59,17 @@ jobs:
       - name: Pytest
         run: uv run pytest --tb=short
 
+      - name: Eval references
+        run: uv run python -m eval.harness --check-references --suite all
+
+      - name: Eval regression gate
+        run: |
+          uv run python -m eval.harness --suite ask-regression
+          uv run python -m eval.harness --suite chat-regression
+          uv run python -m eval.harness --suite acl-regression
+          uv run python -m eval.harness --suite search-regression
+          uv run python -m eval.harness --suite discipline-regression
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

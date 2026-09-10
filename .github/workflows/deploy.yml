@@ -1,0 +1,49 @@
+name: Deploy
+
+# Eval regression lives in CI. This workflow only runs after CI is green
+# on main/master (or a manual dispatch). No token → skip, do not fail forks.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fly:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       contains(fromJSON('["main","master"]'), github.event.workflow_run.head_branch))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on Fly token
+        id: gate
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "FLY_API_TOKEN is unset; skipping deploy (expected on forks)."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip == 'false'
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.gate.outputs.skip == 'false'
+
+      - name: Deploy to Fly
+        if: steps.gate.outputs.skip == 'false'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          flyctl deploy --remote-only --build-arg GIT_SHA="$SHA"

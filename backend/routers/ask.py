@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db import get_session
 from schemas import AskRequest, AskResponse
 from services.ask import AskError, AskService
+from services.identity import IdentityDep
 
 router = APIRouter(prefix="/api/ask", tags=["ask"])
 
@@ -77,10 +78,15 @@ def ask_http_error(exc: BaseException) -> HTTPException:
 @router.post("", response_model=AskResponse)
 @router.post("/", response_model=AskResponse, include_in_schema=False)
 async def ask_research(
+    request: Request,
     payload: AskRequest,
     session: SessionDep,
     ask_service: AskDep,
+    identity: IdentityDep,
 ):
+    from services.rate_limit import require_chat_capacity
+
+    require_chat_capacity(request)
     if (
         not payload.include_papers
         and not payload.include_voice_notes
@@ -92,7 +98,7 @@ async def ask_research(
         )
 
     try:
-        return await ask_service.ask(session, payload)
+        return await ask_service.ask(session, payload, space_ids=identity.space_ids)
     except AskError as exc:
         print(f"❌ Ask generation failed: {exc}")
         raise ask_http_error(exc) from exc

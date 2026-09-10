@@ -17,6 +17,8 @@ export interface EvalTrial {
   grades: EvalGrade[];
   retrieved_titles?: string[];
   tools_called?: string[];
+  gate_status?: string | null;
+  source?: string;
   events?: Record<string, unknown>[];
 }
 
@@ -30,6 +32,13 @@ export interface EvalRunSummary {
   precision_at_k?: number;
   recall_at_k?: number;
   mrr?: number;
+  regression_tasks?: number;
+  quality_tasks?: number;
+  regression_pass_rate?: number;
+  regression_failed?: boolean;
+  quality_pass_at_1?: number | null;
+  quality_pass_hat_k?: number | null;
+  gate?: string;
 }
 
 export interface EvalRun {

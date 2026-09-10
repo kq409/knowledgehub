@@ -141,7 +141,27 @@ async def test_library_upload_classifies_as_note(client: AsyncClient):
         assert deleted.status_code == 204
 
 
-async def test_library_upload_rejects_non_pdf(client: AsyncClient):
-    files = {"file": ("notes.txt", b"not a pdf", "text/plain")}
-    response = await client.post("/api/library/upload", files=files)
-    assert response.status_code == 400
+async def test_library_upload_kind_overrides_classifier(client: AsyncClient):
+    files = {"file": ("notes.pdf", b"%PDF-1.4\n%mock note\n", "application/pdf")}
+    data = {"kind": "paper"}
+    with patch("routers.library.classify_attachment", return_value="note"):
+        created = await client.post("/api/library/upload", files=files, data=data)
+    assert created.status_code == 202
+    payload = created.json()
+    assert payload["kind"] == "paper"
+    assert payload["suggested_kind"] == "note"
+    paper_id = payload["paper"]["id"]
+    try:
+        listed = await client.get("/api/papers")
+        assert any(item["id"] == paper_id for item in listed.json())
+    finally:
+        deleted = await client.delete(f"/api/papers/{paper_id}")
+        assert deleted.status_code == 204
+
+
+async def test_library_upload_forbidden_in_demo(client: AsyncClient, monkeypatch):
+    monkeypatch.setenv("DEMO_MODE", "true")
+    monkeypatch.setenv("DEMO_UPLOADS", "false")
+    files = {"file": ("sample.pdf", b"%PDF-1.4\n%mock\n", "application/pdf")}
+    created = await client.post("/api/library/upload", files=files)
+    assert created.status_code == 403

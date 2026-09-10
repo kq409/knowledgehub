@@ -6,8 +6,9 @@ from pathlib import Path
 
 import httpx
 
-from services.chunking import ParsedChunk
+from services.chunking import ParsedChunk, split_with_overlap
 from services.grobid_tei import parse_tei
+from services.settings import grobid_enabled
 
 
 @dataclass
@@ -26,6 +27,7 @@ class GrobidError(RuntimeError):
 
 class PaperParser:
     def __init__(self, base_url: str | None = None, timeout: float | None = None):
+        self._use_grobid = grobid_enabled() if base_url is None else True
         self._base_url = (
             base_url or os.getenv("GROBID_URL") or "http://grobid:8070"
         ).rstrip("/")
@@ -34,9 +36,14 @@ class PaperParser:
             if timeout is not None
             else float(os.getenv("GROBID_TIMEOUT", "180"))
         )
-        print(f"📄 Paper parser using GROBID at {self._base_url}", flush=True)
+        if self._use_grobid:
+            print(f"📄 Paper parser using GROBID at {self._base_url}", flush=True)
+        else:
+            print("📄 Paper parser using pypdf (GROBID disabled)", flush=True)
 
     def warmup(self) -> None:
+        if not self._use_grobid:
+            return
         url = f"{self._base_url}/api/isalive"
         last_error: Exception | None = None
         for _attempt in range(15):
@@ -57,9 +64,34 @@ class PaperParser:
         )
 
     def parse(self, pdf_path: str | Path, fallback_title: str) -> ParsedPaper:
+        if not self._use_grobid:
+            return self._parse_pypdf(Path(pdf_path), fallback_title)
         tei_xml = self._process_pdf(Path(pdf_path))
         parsed = parse_tei(tei_xml, fallback_title)
         return ParsedPaper(**parsed)
+
+    def _parse_pypdf(self, pdf_path: Path, fallback_title: str) -> ParsedPaper:
+        from services.document_pipeline import extract_document_text
+
+        text = extract_document_text(pdf_path.name, pdf_path.read_bytes())
+        title = fallback_title or pdf_path.stem or "Untitled paper"
+        first_line = next(
+            (line.strip() for line in text.splitlines() if line.strip()),
+            "",
+        )
+        if first_line and len(first_line) <= 180 and first_line != title:
+            title = first_line
+        chunks = [
+            ParsedChunk(text=part, page=None, section=None)
+            for part in split_with_overlap(text)
+        ]
+        abstract = text[:400] if text.strip() else None
+        return ParsedPaper(
+            title=title,
+            abstract=abstract,
+            page_count=None,
+            chunks=chunks,
+        )
 
     def _process_pdf(self, pdf_path: Path) -> str:
         print(f"🔄 GROBID parsing {pdf_path.name}...", flush=True)

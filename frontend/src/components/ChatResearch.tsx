@@ -16,6 +16,7 @@ import type {
 } from '../types';
 import { TextBox } from './TextBox';
 import { useSpeechToComposer } from '../hooks/useSpeechToComposer';
+import { useAppStatus } from '../hooks/appStatus';
 
 const TOOL_LABELS: Record<string, string> = {
   search_library: 'Searching the library',
@@ -212,7 +213,10 @@ function argumentPreview(value: Record<string, unknown>): string {
     .join(' · ');
 }
 
-async function sendApproval(requestId: string, approved: boolean): Promise<void> {
+async function sendApproval(
+  requestId: string,
+  approved: boolean
+): Promise<void> {
   const response = await fetch('/api/chat/approve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -230,7 +234,11 @@ export function ApprovalCards({ items }: { items: ChatApproval[] }) {
   return (
     <div className={styles.approvalList}>
       {items.map((item) => (
-        <div key={item.request_id} className={styles.approvalCard} role="status">
+        <div
+          key={item.request_id}
+          className={styles.approvalCard}
+          role="status"
+        >
           <p className={styles.approvalTitle}>
             {item.status === 'pending'
               ? `Allow ${item.tool}?`
@@ -383,7 +391,12 @@ export function ChatResearch({
   composerSlot,
   conversationId = null,
   onConversation,
+  spaceId = null,
+  spaceName = null,
+  recordIds = [],
 }: ChatResearchProps) {
+  const { whisper_enabled: whisperEnabled, uploads_enabled: uploadsEnabled } =
+    useAppStatus();
   const [question, setQuestion] = useState('');
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [attachments, setAttachments] = useState<File[]>([]);
@@ -455,40 +468,46 @@ export function ChatResearch({
     !speech.isTranscribing &&
     !(speech.isListening && !speech.supportsLive);
 
-  const addFiles = useCallback((incoming: FileList | File[]) => {
-    const next: File[] = [];
-    const rejected: string[] = [];
-    for (const file of Array.from(incoming)) {
-      if (file.type.startsWith('audio/')) {
-        rejected.push(`${file.name} is audio — use the Voice notes tab`);
-        continue;
+  const addFiles = useCallback(
+    (incoming: FileList | File[]) => {
+      if (!uploadsEnabled) {
+        return;
       }
-      const name = file.name.toLowerCase();
-      const ok =
-        file.type.includes('pdf') ||
-        name.endsWith('.pdf') ||
-        name.endsWith('.md') ||
-        name.endsWith('.txt') ||
-        name.endsWith('.csv') ||
-        name.endsWith('.docx') ||
-        file.type.includes('csv') ||
-        file.type.includes('markdown') ||
-        file.type.includes('wordprocessingml');
-      if (!ok) {
-        rejected.push(
-          `${file.name} is not a PDF, Markdown, text, CSV, or Word file`
-        );
-        continue;
+      const next: File[] = [];
+      const rejected: string[] = [];
+      for (const file of Array.from(incoming)) {
+        if (file.type.startsWith('audio/')) {
+          rejected.push(`${file.name} is audio — use the Voice notes tab`);
+          continue;
+        }
+        const name = file.name.toLowerCase();
+        const ok =
+          file.type.includes('pdf') ||
+          name.endsWith('.pdf') ||
+          name.endsWith('.md') ||
+          name.endsWith('.txt') ||
+          name.endsWith('.csv') ||
+          name.endsWith('.docx') ||
+          file.type.includes('csv') ||
+          file.type.includes('markdown') ||
+          file.type.includes('wordprocessingml');
+        if (!ok) {
+          rejected.push(
+            `${file.name} is not a PDF, Markdown, text, CSV, or Word file`
+          );
+          continue;
+        }
+        next.push(file);
       }
-      next.push(file);
-    }
-    if (rejected.length) {
-      setError(rejected.join('. '));
-    }
-    if (next.length) {
-      setAttachments((current) => [...current, ...next]);
-    }
-  }, []);
+      if (rejected.length) {
+        setError(rejected.join('. '));
+      }
+      if (next.length) {
+        setAttachments((current) => [...current, ...next]);
+      }
+    },
+    [uploadsEnabled]
+  );
 
   const updateLastTurn = useCallback((update: (turn: ChatTurn) => ChatTurn) => {
     setTurns((current) => {
@@ -557,6 +576,12 @@ export function ChatResearch({
       );
       if (conversationId) {
         formData.append('conversation_id', conversationId);
+      }
+      if (spaceId) {
+        formData.append('space_id', spaceId);
+      }
+      if (recordIds.length > 0) {
+        formData.append('record_ids', JSON.stringify(recordIds));
       }
       for (const file of pendingFiles) {
         formData.append('files', file, file.name);
@@ -786,6 +811,8 @@ export function ChatResearch({
     attachments,
     turns,
     conversationId,
+    spaceId,
+    recordIds,
     updateLastTurn,
   ]);
 
@@ -825,6 +852,15 @@ export function ChatResearch({
         </div>
       )}
 
+      {spaceName || recordIds.length > 0 ? (
+        <p className={styles.scopeBanner}>
+          Asking in {spaceName || 'this space'}
+          {recordIds.length > 0
+            ? ` · ${recordIds.length} selected file${recordIds.length === 1 ? '' : 's'}`
+            : ''}
+        </p>
+      ) : null}
+
       {attachments.length > 0 && (
         <ul className={styles.chips}>
           {attachments.map((file, index) => (
@@ -857,7 +893,7 @@ export function ChatResearch({
         onChange={setQuestion}
         rows={3}
         isDisabled={isRunning || speech.isTranscribing}
-        placeholder="Ask, attach a file, compare papers, or capture a note…"
+        placeholder="Ask this space — search a document number in the library first…"
         ariaLabel="Research question"
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey) {
@@ -870,55 +906,61 @@ export function ChatResearch({
       />
 
       <div className={styles.actions}>
-        <button
-          type="button"
-          className={styles.plusButton}
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isRunning}
-          aria-label="Attach a file"
-          title="Attach PDF, Markdown, text, CSV, or Word"
-        >
-          <Plus className={styles.plusIcon} />
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept=".pdf,.md,.txt,.csv,.docx,application/pdf,text/markdown,text/plain,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          className={styles.hiddenInput}
-          onChange={(event) => {
-            if (event.target.files?.length) {
-              addFiles(event.target.files);
+        {uploadsEnabled ? (
+          <>
+            <button
+              type="button"
+              className={styles.plusButton}
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isRunning}
+              aria-label="Attach a file"
+              title="Attach PDF, Markdown, text, CSV, or Word"
+            >
+              <Plus className={styles.plusIcon} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.md,.txt,.csv,.docx,application/pdf,text/markdown,text/plain,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              className={styles.hiddenInput}
+              onChange={(event) => {
+                if (event.target.files?.length) {
+                  addFiles(event.target.files);
+                }
+                event.target.value = '';
+              }}
+            />
+          </>
+        ) : null}
+        {whisperEnabled ? (
+          <button
+            type="button"
+            className={`${styles.micButton} ${
+              speech.isListening ? styles.micActive : ''
+            }`}
+            onClick={speech.toggle}
+            disabled={isRunning || speech.isTranscribing}
+            aria-label={
+              speech.isListening
+                ? 'Stop voice input'
+                : speech.supportsLive
+                  ? 'Start voice input'
+                  : 'Record voice input'
             }
-            event.target.value = '';
-          }}
-        />
-        <button
-          type="button"
-          className={`${styles.micButton} ${
-            speech.isListening ? styles.micActive : ''
-          }`}
-          onClick={speech.toggle}
-          disabled={isRunning || speech.isTranscribing}
-          aria-label={
-            speech.isListening
-              ? 'Stop voice input'
-              : speech.supportsLive
-                ? 'Start voice input'
-                : 'Record voice input'
-          }
-          title={
-            speech.supportsLive
-              ? 'Speak into the box'
-              : 'Hold to record, then transcribe into the box'
-          }
-        >
-          {speech.isListening ? (
-            <Square className={styles.micIcon} />
-          ) : (
-            <Mic className={styles.micIcon} />
-          )}
-        </button>
+            title={
+              speech.supportsLive
+                ? 'Speak into the box'
+                : 'Hold to record, then transcribe into the box'
+            }
+          >
+            {speech.isListening ? (
+              <Square className={styles.micIcon} />
+            ) : (
+              <Mic className={styles.micIcon} />
+            )}
+          </button>
+        ) : null}
         <button
           type="button"
           className={styles.primaryButton}

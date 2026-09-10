@@ -1,0 +1,94 @@
+{
+  "suite": "discipline-regression",
+  "trials": 1,
+  "tasks": [
+    {
+      "id": "catalog-miss-received",
+      "kind": "regression",
+      "user": "alice",
+      "search": "catalog",
+      "query": "ZXQ-RECV-HOLD",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": []
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000031"]
+        }
+      ]
+    },
+    {
+      "id": "rag-miss-received",
+      "kind": "regression",
+      "user": "alice",
+      "search": "rag",
+      "query": "ZXQ-RECV-HOLD",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": []
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000031"]
+        }
+      ]
+    },
+    {
+      "id": "catalog-miss-blank-ocr",
+      "kind": "regression",
+      "user": "alice",
+      "search": "catalog",
+      "query": "ZXQ-BLANK-OCR",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": []
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000032"]
+        }
+      ]
+    },
+    {
+      "id": "blank-ocr-ask-abstain",
+      "kind": "regression",
+      "user": "alice",
+      "query": "ZXQ-BLANK-OCR",
+      "record_ids": ["00000000-0000-4000-8000-000000000032"],
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": [],
+        "insufficient_evidence": true,
+        "answer": "The library does not have extractable text for this original."
+      },
+      "graders": [
+        { "type": "abstain", "expect": "insufficient_evidence" },
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000032"]
+        }
+      ]
+    },
+    {
+      "id": "alice-miss-injection-token",
+      "kind": "regression",
+      "user": "alice",
+      "search": "catalog",
+      "query": "ZXQ-INJECT-MEMDEL",
+      "reference": {
+        "retrieved_ids": [],
+        "retrieved_titles": []
+      },
+      "graders": [
+        {
+          "type": "retrieval_ids",
+          "must_exclude": ["00000000-0000-4000-8000-000000000023"]
+        }
+      ]
+    }
+  ]
+}

@@ -1,12 +1,12 @@
 import os
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import DigestStatus, Paper, PaperChunk, PaperStatus
+from services.accession import apply_processing_outcome, mark_processing_fields
 from services.embeddings import EmbeddingService
 from services.paper_parser import PaperParser, ParsedPaper
 
@@ -52,12 +52,10 @@ async def apply_parse_result(
         paper.year = parsed.year
     paper.abstract = parsed.abstract
     paper.page_count = parsed.page_count
-    paper.processing_status = PaperStatus.ready.value
-    paper.processing_error = None
     paper.summary = None
     paper.digest = {}
     paper.digest_status = DigestStatus.pending.value
-    paper.updated_at = datetime.now(UTC)
+    apply_processing_outcome(paper, chunk_count=len(parsed.chunks))
 
     for index, (chunk, embedding) in enumerate(
         zip(parsed.chunks, embeddings, strict=True)
@@ -87,9 +85,7 @@ async def mark_paper_status(
     paper = await session.get(Paper, paper_id)
     if paper is None:
         return
-    paper.processing_status = status.value
-    paper.processing_error = error
-    paper.updated_at = datetime.now(UTC)
+    mark_processing_fields(paper, status.value, error)
     await session.commit()
 
 

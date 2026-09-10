@@ -12,15 +12,53 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 EMBEDDING_DIM = 768
+DEFAULT_SPACE_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
+DEFAULT_SPACE_SLUG = "default"
+DEFAULT_SPACE_ID_SQL = text("'00000000-0000-4000-8000-000000000001'")
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class Space(Base):
+    """A library partition. Stub ACL in Phase 1; not an org/tenant model."""
+
+    __tablename__ = "spaces"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class SpaceMembership(Base):
+    __tablename__ = "space_memberships"
+    __table_args__ = (UniqueConstraint("space_id", "user_id"),)
+
+    space_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("spaces.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
 
 
 class ReviewStatus(str, enum.Enum):
@@ -42,6 +80,22 @@ class ProcessingStatus(str, enum.Enum):
     failed = "failed"
 
 
+class AccessionStatus(str, enum.Enum):
+    """Whether the original may be searched.
+
+    received: bytes are stored, not yet in search/RAG.
+    accessioned: parse produced text; catalog and Ask may use it.
+    rejected: blank, failed, or refused. Not searchable.
+    """
+
+    received = "received"
+    accessioned = "accessioned"
+    rejected = "rejected"
+
+
+ACCESSIONED_DEFAULT_SQL = text("'accessioned'")
+
+
 class NoteLinkSource(str, enum.Enum):
     researcher = "researcher"
     ai = "ai"
@@ -57,6 +111,14 @@ class Note(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    space_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("spaces.id"),
+        nullable=False,
+        index=True,
+        default=DEFAULT_SPACE_ID,
+        server_default=DEFAULT_SPACE_ID_SQL,
     )
     source_type: Mapped[str] = mapped_column(
         String(32), nullable=False, default=NoteSourceType.voice.value
@@ -83,6 +145,16 @@ class Note(Base):
         String(32), nullable=False, default=ProcessingStatus.pending.value
     )
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    accession_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=AccessionStatus.accessioned.value,
+        server_default=ACCESSIONED_DEFAULT_SQL,
+    )
     related_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -154,6 +226,14 @@ class Paper(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    space_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("spaces.id"),
+        nullable=False,
+        index=True,
+        default=DEFAULT_SPACE_ID,
+        server_default=DEFAULT_SPACE_ID_SQL,
+    )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     authors: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -172,6 +252,16 @@ class Paper(Base):
         String(32), nullable=False, default=PaperStatus.pending.value
     )
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    accession_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=AccessionStatus.accessioned.value,
+        server_default=ACCESSIONED_DEFAULT_SQL,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -305,6 +395,14 @@ class LibraryDocument(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    space_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("spaces.id"),
+        nullable=False,
+        index=True,
+        default=DEFAULT_SPACE_ID,
+        server_default=DEFAULT_SPACE_ID_SQL,
+    )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(512), nullable=False)
     original_file: Mapped[str] = mapped_column(String(1024), nullable=False)
@@ -314,6 +412,16 @@ class LibraryDocument(Base):
         String(32), nullable=False, default=ProcessingStatus.pending.value
     )
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    accession_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=AccessionStatus.accessioned.value,
+        server_default=ACCESSIONED_DEFAULT_SQL,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
